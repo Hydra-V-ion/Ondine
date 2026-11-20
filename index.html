@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Sonoscope — visuels qui écoutent ta musique</title>
+<title>Ondine — visuels qui écoutent ta musique</title>
 <style>
   :root{
     --bg:#05060a; --panel:rgba(14,16,24,.72); --line:rgba(255,255,255,.12);
@@ -69,7 +69,7 @@
 <div id="drop">Dépose un fichier audio,<br>une image ou une vidéo</div>
 
 <div id="ui">
-  <h1>Sonoscope</h1>
+  <h1>Ondine</h1>
   <div class="sub">Visuels temps réel pilotés par le son</div>
 
   <div class="row">
@@ -455,8 +455,113 @@ void main(){
   col *= 1.0 + 0.15 * uKick;
   // pas de tone mapping ici : l'image garde ses propres couleurs
   o = vec4(col * (1.0 - 0.3 * dot(uv0, uv0)), 1.0);
+}`},
+{ name:'Julia', body:`
+void main(){
+  vec2 uv = uvOf() * 2.4;
+  float t = uTime * 0.25;
+  float a = t + uBass * 0.6;
+  vec2 c = 0.7885 * vec2(cos(a), sin(a)) * (0.9 + 0.2 * uMid);
+  vec2 z = uv;
+  float n = 0.0;
+  for(int k = 0; k < 80; k++){
+    z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+    if(dot(z, z) > 16.0) break;
+    n += 1.0;
+  }
+  float f = n / 80.0;
+  vec3 col = vec3(0.01, 0.0, 0.02);
+  if(n < 80.0){
+    col = pal(f * 6.0 + t * 0.2) * (0.3 + 0.7 * sqrt(f)) * (0.8 + uLevel);
+  }
+  col += pal(t) * exp(-length(uv) * 2.0) * uKick * 0.4;
+  o = finish(col, uvOf());
+}`},
+{ name:'Mandelbulb', body:`
+float de(vec3 p){
+  vec3 z = p; float dr = 1.0, r = 0.0;
+  float pw = 8.0 + 1.5 * uBass;
+  for(int i = 0; i < 6; i++){
+    r = length(z);
+    if(r > 2.0) break;
+    float th = acos(clamp(z.z / max(r, 1e-6), -1.0, 1.0)) * pw;
+    float ph = atan(z.y, z.x) * pw;
+    dr = pow(r, pw - 1.0) * pw * dr + 1.0;
+    z = pow(r, pw) * vec3(sin(th) * cos(ph), sin(th) * sin(ph), cos(th)) + p;
+  }
+  return 0.5 * log(max(r, 1e-6)) * r / dr;
+}
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  vec3 ro = vec3(0.0, 0.0, 2.8);
+  ro.xz = rot(t * 0.25) * ro.xz;
+  vec3 fw = normalize(-ro);
+  vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(uv.x * rt + uv.y * up + 1.7 * fw);
+  float td = 0.0, d = 1.0, steps = 0.0;
+  vec3 p = ro;
+  for(int i = 0; i < 80; i++){
+    p = ro + rd * td;
+    d = de(p);
+    steps += 1.0;
+    if(d < 0.0015 || td > 5.0) break;
+    td += d * 0.9;
+  }
+  vec3 col;
+  if(d < 0.0015){
+    vec2 e = vec2(0.002, 0.0);
+    vec3 n = normalize(vec3(de(p + e.xyy) - de(p - e.xyy),
+                            de(p + e.yxy) - de(p - e.yxy),
+                            de(p + e.yyx) - de(p - e.yyx)));
+    float diff = max(dot(n, normalize(vec3(0.6, 0.8, 0.5))), 0.0);
+    float rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+    col = pal(length(p) * 1.5 + t * 0.05) * (0.25 + diff * 0.9)
+        + pal(t * 0.1 + 0.5) * rim * (0.5 + uKick);
+  }else{
+    float g = steps / 80.0;
+    col = pal(g * 2.0 + t * 0.04) * g * g * (0.6 + uLevel * 1.5);
+  }
+  o = finish(col, uv);
+}`},
+{ name:'Fleur de vie', body:`
+void main(){
+  vec2 uv = uvOf() * 3.0;
+  float t = uTime;
+  uv *= rot(t * 0.05);
+  float d = abs(length(uv) - 1.0);
+  for(int k = 0; k < 6; k++){
+    float a = float(k) * 1.0471976;
+    d = min(d, abs(length(uv - vec2(cos(a), sin(a))) - 1.0));
+  }
+  for(int k = 0; k < 12; k++){
+    float a = float(k) * 0.5235988 + 0.2618;
+    d = min(d, abs(length(uv - 1.7320508 * vec2(cos(a), sin(a))) - 1.0));
+  }
+  float width = 45.0 - 20.0 * uBass;
+  float line = exp(-d * width) * (0.6 + uLevel * 2.0 + uKick * 0.8);
+  vec3 col = pal(d * 4.0 + t * 0.05) * line;
+  col += pal(length(uv) * 0.3 + t * 0.02) * 0.05 * (1.0 - length(uv) * 0.2);
+  o = finish(col, uvOf());
+}`},
+{ name:'Tunnel IFS', body:`
+void main(){
+  vec2 uv = uvOf() * 2.0;
+  float t = uTime * 0.15;
+  float trap = 1e9;
+  for(int i = 0; i < 9; i++){
+    uv = abs(uv) - vec2(0.55 + 0.15 * uBass, 0.35 + 0.1 * uMid);
+    uv *= rot(0.4 + 0.15 * sin(t + float(i)));
+    uv *= 1.12;
+    trap = min(trap, length(uv) / 1.12);
+  }
+  vec3 col = pal(trap * 2.0 + t) * exp(-trap * 1.5) * (0.8 + uLevel * 2.0);
+  col += pal(t + 0.4) * uKick * 0.25 * exp(-trap * 4.0);
+  o = finish(col, uvOf());
 }`}
 ];
+const SCENE_KEYS = ['1','2','3','4','5','6','7','8','9','0','q','w','e','r','t'];
 const IMG_MODES = ['Pulse', 'Liquide', 'Kaléido', 'Glitch', 'Chute'];
 
 /* ═════════════════════ Compilation ═════════════════════ */
@@ -552,7 +657,7 @@ const PALETTES = [
   {n:'Perso',   s:['#ff5f6d','#ffc371','#47e5bc','#3b82f6','#a855f7'], custom:true},
 ];
 const CUSTOM = PALETTES.length - 1;
-const LS_KEY = 'sonoscope.custom';
+const LS_KEY = 'ondine.custom';
 try{
   const saved = JSON.parse(localStorage.getItem(LS_KEY));
   if(Array.isArray(saved) && saved.length === 5 && saved.every(h => /^#[0-9a-f]{6}$/i.test(h))) PALETTES[CUSTOM].s = saved;
@@ -615,7 +720,7 @@ $('#bRev').onclick = () => { PALETTES[CUSTOM].s = PALETTES[state.pal].s.slice().
 const scenesBox = $('#scenes');
 SCENES.forEach((s, i) => {
   const b = document.createElement('button');
-  b.textContent = ((i + 1) % 10) + ' · ' + s.name;
+  b.textContent = SCENE_KEYS[i] + ' · ' + s.name;
   b.onclick = () => setScene(i);
   scenesBox.appendChild(b);
 });
@@ -959,7 +1064,7 @@ function toggleRec(){
     const type = mime.split(';')[0], ext = type.includes('mp4') ? 'mp4' : 'webm';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob(chunks, {type}));
-    a.download = 'sonoscope-' + Date.now() + '.' + ext;
+    a.download = 'ondine-' + Date.now() + '.' + ext;
     a.click();
     mr = null; $('#bRec').classList.remove('on'); $('#bRec').textContent = '● Enregistrer la vidéo';
     setStatus('Vidéo enregistrée (' + ext + ').');
@@ -988,8 +1093,8 @@ addEventListener('keydown', e => {
   else if(k === 'arrowright') setScene((state.scene + 1) % SCENES.length);
   else if(k === 'arrowleft') setScene((state.scene + SCENES.length - 1) % SCENES.length);
   else if(k === ' ' && mode === 'file'){ e.preventDefault(); aud.paused ? aud.play() : aud.pause(); }
-  else if(k >= '0' && k <= '9'){
-    const idx = k === '0' ? 9 : parseInt(k) - 1;
+  else if(SCENE_KEYS.indexOf(k) >= 0){
+    const idx = SCENE_KEYS.indexOf(k);
     if(idx < SCENES.length) setScene(idx);
   }
 });
@@ -1003,6 +1108,11 @@ function frame(now){
   drawMini();
   T += dt * state.speed * (0.6 + A.level * 1.2);
 
+  if(GRAPH_MODE){
+    const ctx = {dt, A, T};
+    GRAPH.ctx = ctx; evalNumeric(ctx); renderGraph(ctx);
+    requestAnimationFrame(frame); return;
+  }
   let pr;
   try{ pr = getProgram(state.scene); }catch(e){ requestAnimationFrame(frame); return; }
 
@@ -1038,6 +1148,788 @@ function frame(now){
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   requestAnimationFrame(frame);
 }
+
+let GRAPH_MODE = false;
+/* ═════════════════════ Graphe de nœuds : noyau ═════════════════════
+   Types de ports : 'num' (nombre) ou 'tex' (image). Un fil relie une sortie à UNE entrée ;
+   une entrée n'accepte qu'un seul fil. Les boucles sont refusées à la connexion. */
+
+const NODE_TYPES = {};          // type -> définition (ports, propriétés, calcul ou rendu)
+const GRAPH = { nodes:{}, edges:[], nextId:1, order:[], dirty:true };
+
+/* Définit un type. in : [{k, label, type, def, min, max, step}] ; out : [{k, label, type}] */
+function defNode(type, def){ NODE_TYPES[type] = Object.assign({type, title:type, in:[], out:[], kind:'num'}, def); }
+
+/* ── Nœuds numériques (calculés en JavaScript à chaque image) ── */
+const SHAPES = ['sinus','triangle','dent de scie','carré'];
+const MATH_OPS = ['a + b','a − b','a × b','min','max','a ^ b','mélange'];
+const lfoWave = (shape, ph) => {
+  const f = ph - Math.floor(ph);
+  return shape === 0 ? 0.5 + 0.5 * Math.sin(ph * 6.28318)
+       : shape === 1 ? 1 - Math.abs(2 * f - 1)
+       : shape === 2 ? f : (f < 0.5 ? 1 : 0);
+};
+
+defNode('audio', {
+  title:'Audio', kind:'num',
+  in:[],
+  out:[{k:'bass',label:'graves',type:'num'},{k:'mid',label:'médiums',type:'num'},{k:'treble',label:'aigus',type:'num'},
+       {k:'level',label:'niveau',type:'num'},{k:'kick',label:'kick',type:'num'}],
+  calc:(n, inp, ctx) => ({bass:ctx.A.bass, mid:ctx.A.mid, treble:ctx.A.treble, level:ctx.A.level, kick:ctx.A.kick})
+});
+defNode('slider', {
+  title:'Curseur', kind:'num',
+  in:[{k:'value',label:'valeur',type:'num',def:0.5,min:0,max:1,step:0.01}],
+  out:[{k:'out',label:'sortie',type:'num'}],
+  calc:(n, inp) => ({out:inp.value})
+});
+defNode('lfo', {
+  title:'LFO', kind:'num',
+  in:[{k:'freq',label:'fréquence (Hz)',type:'num',def:0.25,min:0.02,max:4,step:0.01},
+      {k:'shape',label:'forme',type:'num',def:0,min:0,max:3,step:1,options:SHAPES}],
+  out:[{k:'out',label:'sortie',type:'num'}],
+  calc:(n, inp, ctx) => { n.st.ph = (n.st.ph || 0) + ctx.dt * inp.freq; return {out:lfoWave(Math.round(inp.shape), n.st.ph)}; }
+});
+defNode('math', {
+  title:'Math', kind:'num',
+  in:[{k:'a',label:'a',type:'num',def:0.5,min:0,max:1,step:0.01},
+      {k:'b',label:'b',type:'num',def:0.5,min:0,max:1,step:0.01},
+      {k:'op',label:'opération',type:'num',def:2,min:0,max:6,step:1,options:MATH_OPS}],
+  out:[{k:'out',label:'sortie',type:'num'}],
+  calc:(n, inp) => {
+    const a = inp.a, b = inp.b;
+    switch(Math.round(inp.op)){
+      case 0: return {out:a + b};
+      case 1: return {out:a - b};
+      case 2: return {out:a * b};
+      case 3: return {out:Math.min(a, b)};
+      case 4: return {out:Math.max(a, b)};
+      case 5: return {out:Math.pow(Math.max(0, a), b * 4)};
+      default: return {out:(a + b) / 2};
+    }
+  }
+});
+defNode('remap', {
+  title:'Échelle', kind:'num',
+  in:[{k:'in',label:'entrée',type:'num',def:0,min:0,max:1,step:0.01},
+      {k:'lo',label:'sortie min',type:'num',def:0,min:-4,max:8,step:0.01},
+      {k:'hi',label:'sortie max',type:'num',def:1,min:-4,max:8,step:0.01}],
+  out:[{k:'out',label:'sortie',type:'num'}],
+  calc:(n, inp) => ({out:inp.lo + (inp.hi - inp.lo) * Math.max(0, Math.min(1, inp.in))})
+});
+defNode('smooth', {
+  title:'Lissage', kind:'num',
+  in:[{k:'in',label:'entrée',type:'num',def:0,min:0,max:1,step:0.01},
+      {k:'att',label:'attaque (s)',type:'num',def:0.03,min:0.001,max:1,step:0.001},
+      {k:'rel',label:'relâche (s)',type:'num',def:0.4,min:0.001,max:3,step:0.01}],
+  out:[{k:'out',label:'sortie',type:'num'}],
+  calc:(n, inp, ctx) => {
+    const v = n.st.v || 0, tau = inp.in > v ? inp.att : inp.rel;
+    n.st.v = v + (inp.in - v) * (1 - Math.exp(-ctx.dt / tau));
+    return {out:n.st.v};
+  }
+});
+defNode('threshold', {
+  title:'Seuil', kind:'num',
+  in:[{k:'in',label:'entrée',type:'num',def:0,min:0,max:1,step:0.01},
+      {k:'thr',label:'seuil',type:'num',def:0.5,min:0,max:1,step:0.01}],
+  out:[{k:'out',label:'0 / 1',type:'num'}],
+  calc:(n, inp) => ({out:inp.in >= inp.thr ? 1 : 0})
+});
+
+/* ── Gestion du graphe ── */
+function addNode(type, x, y, props){
+  const T = NODE_TYPES[type];
+  if(!T) throw new Error('type inconnu : ' + type);
+  const id = 'n' + (GRAPH.nextId++);
+  const n = {id, type, x:x || 0, y:y || 0, props:{}, out:{}, st:{}};
+  T.in.forEach(p => { n.props[p.k] = p.def; });
+  if(T.props) T.props.forEach(p => { n.props[p.k] = p.def; });
+  Object.assign(n.props, props || {});
+  GRAPH.nodes[id] = n; GRAPH.dirty = true;
+  return n;
+}
+function removeNode(id){
+  delete GRAPH.nodes[id];
+  GRAPH.edges = GRAPH.edges.filter(e => e.from !== id && e.to !== id);
+  GRAPH.dirty = true;
+}
+function portOf(node, side, k){ return NODE_TYPES[node.type][side].find(p => p.k === k); }
+
+/* Y a-t-il un chemin from -> ... -> target ?  (sert à refuser les boucles) */
+function reaches(from, target){
+  const seen = new Set(), stack = [from];
+  while(stack.length){
+    const id = stack.pop();
+    if(id === target) return true;
+    if(seen.has(id)) continue;
+    seen.add(id);
+    GRAPH.edges.forEach(e => { if(e.from === id) stack.push(e.to); });
+  }
+  return false;
+}
+/* Tente de relier ; renvoie {ok:true} ou {ok:false, why:'…'} */
+function connect(from, fromPort, to, toPort){
+  const a = GRAPH.nodes[from], b = GRAPH.nodes[to];
+  if(!a || !b) return {ok:false, why:'nœud introuvable'};
+  if(from === to) return {ok:false, why:'un nœud ne peut pas se relier à lui-même'};
+  const po = portOf(a, 'out', fromPort), pi = portOf(b, 'in', toPort);
+  if(!po || !pi) return {ok:false, why:'port introuvable'};
+  if(po.type !== pi.type) return {ok:false, why:'types incompatibles (' + po.type + ' → ' + pi.type + ')'};
+  if(reaches(to, from)) return {ok:false, why:'ce fil créerait une boucle'};
+  GRAPH.edges = GRAPH.edges.filter(e => !(e.to === to && e.toPort === toPort));   // une seule source par entrée
+  GRAPH.edges.push({from, fromPort, to, toPort});
+  GRAPH.dirty = true;
+  return {ok:true};
+}
+function disconnect(to, toPort){
+  GRAPH.edges = GRAPH.edges.filter(e => !(e.to === to && e.toPort === toPort));
+  GRAPH.dirty = true;
+}
+const edgeInto = (id, k) => GRAPH.edges.find(e => e.to === id && e.toPort === k);
+
+/* Ordre de calcul : parcours en profondeur à partir des nœuds « Sortie » (seul l'amont est calculé) */
+function rebuildOrder(){
+  const order = [], seen = new Set();
+  const visit = id => {
+    if(seen.has(id)) return;
+    seen.add(id);
+    GRAPH.edges.forEach(e => { if(e.to === id) visit(e.from); });
+    order.push(id);                      // un nœud n'arrive qu'après toutes ses sources
+  };
+  Object.values(GRAPH.nodes).filter(n => NODE_TYPES[n.type].sink).forEach(n => visit(n.id));
+  GRAPH.order = order; GRAPH.dirty = false;
+}
+
+/* Valeur d'une entrée : fil s'il y en a un, sinon la propriété du nœud */
+function inputValues(n){
+  const T = NODE_TYPES[n.type], v = {};
+  T.in.forEach(p => {
+    const e = edgeInto(n.id, p.k);
+    if(e && p.type === 'num'){ const s = GRAPH.nodes[e.from]; v[p.k] = (s && s.out[e.fromPort] !== undefined) ? s.out[e.fromPort] : p.def; }
+    else if(e && p.type === 'tex'){ const s = GRAPH.nodes[e.from]; v[p.k] = (s && s.target) ? s.target.tex : null; }
+    else if(p.type === 'tex') v[p.k] = null;                                   // entrée image non reliée
+    else if(p.auto && GRAPH.ctx) v[p.k] = GRAPH.ctx.A[p.auto];                // non reliée : signal audio global
+    else v[p.k] = n.props[p.k];
+  });
+  (T.props || []).forEach(p => { v[p.k] = n.props[p.k]; });
+  return v;
+}
+/* Recalcule tous les nœuds numériques en aval des sources. Appelé à chaque image : un changement
+   en amont se propage donc immédiatement, dans l'ordre, jusqu'à la sortie. */
+function evalNumeric(ctx){
+  if(GRAPH.dirty) rebuildOrder();
+  GRAPH.order.forEach(id => {
+    const n = GRAPH.nodes[id], T = NODE_TYPES[n.type];
+    if(T.kind !== 'num') return;
+    n.out = T.calc(n, inputValues(n), ctx);
+  });
+}
+
+/* ── Sauvegarde / chargement ── */
+function graphToJSON(){
+  return JSON.stringify({v:1, nextId:GRAPH.nextId,
+    nodes:Object.values(GRAPH.nodes).map(n => ({id:n.id, type:n.type, x:n.x, y:n.y, props:n.props})),
+    edges:GRAPH.edges});
+}
+function graphFromJSON(txt){
+  const d = JSON.parse(txt);
+  if(!d || !Array.isArray(d.nodes) || !Array.isArray(d.edges)) throw new Error('fichier de graphe invalide');
+  GRAPH.nodes = {}; GRAPH.edges = []; GRAPH.nextId = d.nextId || 1;
+  d.nodes.forEach(o => {
+    if(!NODE_TYPES[o.type]) return;
+    const n = addNode(o.type, o.x, o.y, o.props); delete GRAPH.nodes[n.id];
+    n.id = String(o.id); GRAPH.nodes[n.id] = n;
+  });
+  d.edges.forEach(e => connect(e.from, e.fromPort, e.to, e.toPort));      // repasse par la validation (anti-boucle)
+  GRAPH.dirty = true;
+}
+
+/* ═════════════════════ Graphe de nœuds : rendu GPU ═════════════════════
+   Chaque nœud « image » dessine dans sa propre texture (framebuffer) ; les nœuds en aval la lisent.
+   Le nœud Scène réutilise les shaders de scène existants ; les effets sont de petits shaders plein écran. */
+
+const blackTex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, blackTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]));
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+/* Cible de rendu de la taille du canvas ; recréée si le canvas change de taille */
+function makeTarget(){
+  const tex = gl.createTexture(), fb = gl.createFramebuffer(), w = canvas.width, h = canvas.height;
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return {tex, fb, w, h};
+}
+function freeTarget(t){ if(t){ gl.deleteTexture(t.tex); gl.deleteFramebuffer(t.fb); } }
+function slot(n, key){
+  let t = n[key];
+  if(!t || t.w !== canvas.width || t.h !== canvas.height){ freeTarget(t); t = n[key] = makeTarget(); }
+  return t;
+}
+function bindTarget(t){
+  gl.bindFramebuffer(gl.FRAMEBUFFER, t ? t.fb : null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+const useTex = (unit, tex) => { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex || blackTex); };
+
+/* ── Nœud Scène : une des scènes existantes, avec ses entrées reliables ── */
+const gradCache = new Float32Array(15);
+defNode('scene', {
+  title:'Scène', kind:'tex',
+  in:[{k:'speed',label:'vitesse',type:'num',def:1,min:0.1,max:3,step:0.05},
+      {k:'sym',label:'symétrie',type:'num',def:8,min:3,max:16,step:1},
+      {k:'bass',label:'graves',type:'num',def:0,auto:'bass'},{k:'mid',label:'médiums',type:'num',def:0,auto:'mid'},
+      {k:'treble',label:'aigus',type:'num',def:0,auto:'treble'},{k:'level',label:'niveau',type:'num',def:0,auto:'level'},
+      {k:'kick',label:'kick',type:'num',def:0,auto:'kick'}],
+  props:[{k:'scene',label:'scène',def:0,options:SCENES.map(s => s.name)},
+         {k:'palette',label:'palette',def:0,options:PALETTES.map(p => p.n)},
+         {k:'imgMode',label:'mode image',def:0,options:IMG_MODES}],
+  out:[{k:'out',label:'image',type:'tex'}],
+  render:(n, v, ctx) => {
+    const i = Math.max(0, Math.min(SCENES.length - 1, Math.round(n.props.scene)));
+    const pr = getProgram(i), u = pr.loc;
+    n.st.T = (n.st.T || 0) + ctx.dt * v.speed * (0.6 + v.level * 1.2);
+    PALETTES[Math.round(n.props.palette) % PALETTES.length].s.forEach((h, k) => gradCache.set(hexToRgb(h), k * 3));
+    bindTarget(slot(n, 'target'));
+    gl.useProgram(pr.p);
+    gl.uniform2f(u.uRes, canvas.width, canvas.height);
+    gl.uniform1f(u.uTime, n.st.T);
+    gl.uniform1f(u.uBass, v.bass); gl.uniform1f(u.uMid, v.mid); gl.uniform1f(u.uTreble, v.treble);
+    gl.uniform1f(u.uLevel, v.level); gl.uniform1f(u.uKick, v.kick); gl.uniform1f(u.uSym, v.sym);
+    gl.uniform3fv(u.uGrad, gradCache);
+    gl.uniform1f(u.uImgAspect, imgAspect); gl.uniform1f(u.uMode, Math.round(n.props.imgMode));
+    useTex(0, specTex); gl.uniform1i(u.uSpec, 0);
+    useTex(1, imgTex);  gl.uniform1i(u.uImg, 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+});
+
+/* ── Effets : image(s) en entrée -> image en sortie ── */
+const FX_HEAD = `#version 300 es
+precision highp float;
+uniform sampler2D uIn, uIn2, uPrev;
+uniform vec2 uRes; uniform float uTime, uKick, uP0, uP1, uP2, uP3;
+out vec4 o;
+vec4 T(vec2 q){ return texture(uIn, q); }
+vec2 asp(vec2 q){ return (q - 0.5) * vec2(uRes.x / uRes.y, 1.0); }
+vec2 unasp(vec2 p){ return p / vec2(uRes.x / uRes.y, 1.0) + 0.5; }
+mat2 rot2(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+vec3 hueShift(vec3 c, float h){
+  float a = h * 6.28318, ca = cos(a), sa = sin(a); vec3 k = vec3(0.57735);
+  return c * ca + cross(k, c) * sa + k * dot(k, c) * (1.0 - ca);
+}
+`;
+const P = (k, label, def, min, max, step, options) => ({k, label, type:'num', def, min, max, step, options});
+function defFx(type, title, params, body, opts){
+  opts = opts || {};
+  defNode(type, {
+    title, kind:'tex', sink:!!opts.sink,
+    in:[{k:'in',label:'image',type:'tex'}].concat(opts.second ? [{k:'in2',label:'image B',type:'tex'}] : []).concat(params),
+    out:opts.sink ? [] : [{k:'out',label:'image',type:'tex'}],
+    fx:{body, feedback:!!opts.feedback, prog:null},
+    render:(n, v, ctx) => renderFx(n, v, ctx)
+  });
+}
+defFx('mirror', 'Miroir', [P('n','segments',6,2,16,1), P('ang','angle',0,0,6.28,0.01)], `
+vec4 fx(vec2 q){
+  vec2 p = rot2(uP1) * asp(q);
+  float seg = 6.28318 / floor(uP0), a = atan(p.y, p.x), r = length(p);
+  a = abs(mod(a, seg) - seg * 0.5);
+  return T(unasp(r * vec2(cos(a), sin(a))));
+}`);
+defFx('zoom', 'Zoom / rotation', [P('z','zoom',1,0.3,3,0.01), P('rot','rotation',0,-3.14,3.14,0.01)], `
+vec4 fx(vec2 q){ return T(unasp(rot2(uP1) * asp(q) / uP0)); }`);
+defFx('rgb', 'Séparation RVB', [P('amt','écart',0.01,0,0.08,0.001), P('ang','angle',0,0,6.28,0.01)], `
+vec4 fx(vec2 q){
+  vec2 d = vec2(cos(uP1), sin(uP1)) * uP0;
+  return vec4(T(q + d).r, T(q).g, T(q - d).b, 1.0);
+}`);
+defFx('feedback', 'Traînée', [P('dec','persistance',0.85,0,0.98,0.01), P('z','zoom',1.01,0.95,1.05,0.001), P('rot','rotation',0.01,-0.1,0.1,0.001)], `
+vec4 fx(vec2 q){
+  vec3 prev = texture(uPrev, unasp(rot2(uP2) * asp(q) / uP1)).rgb * uP0;
+  return vec4(max(T(q).rgb, prev), 1.0);
+}`, {feedback:true});
+defFx('pixel', 'Pixélisation', [P('size','cellules',60,4,300,1)], `
+vec4 fx(vec2 q){
+  vec2 g = vec2(uP0 * uRes.x / uRes.y, uP0);
+  return T((floor(q * g) + 0.5) / g);
+}`);
+defFx('color', 'Couleur', [P('hue','teinte',0,0,1,0.005), P('sat','saturation',1,0,2,0.01), P('con','contraste',1,0,2,0.01), P('bri','luminosité',0,-0.5,0.5,0.01)], `
+vec4 fx(vec2 q){
+  vec3 c = hueShift(T(q).rgb, uP0);
+  c = mix(vec3(dot(c, vec3(0.299, 0.587, 0.114))), c, uP1);
+  return vec4(max((c - 0.5) * uP2 + 0.5 + uP3, 0.0), 1.0);
+}`);
+defFx('glow', 'Halo', [P('rad','rayon',0.008,0.002,0.03,0.001), P('gain','intensité',1,0,3,0.01)], `
+vec4 fx(vec2 q){
+  vec3 s = vec3(0.0); float w = 0.0;
+  for(int i = -2; i <= 2; i++) for(int j = -2; j <= 2; j++){
+    float k = exp(-float(i * i + j * j) * 0.3);
+    s += T(q + vec2(float(i), float(j)) * uP0 * vec2(uRes.y / uRes.x, 1.0)).rgb * k; w += k;
+  }
+  return vec4(T(q).rgb + s / w * uP1, 1.0);
+}`);
+defFx('mix', 'Mélange', [P('amt','quantité',0.5,0,1,0.01), P('mode','mode',0,0,3,1,['fondu','addition','écran','multiplier'])], `
+vec4 fx(vec2 q){
+  vec3 a = T(q).rgb, b = texture(uIn2, q).rgb;
+  float m = floor(uP1 + 0.5);
+  vec3 r = m < 0.5 ? mix(a, b, uP0) : m < 1.5 ? a + b * uP0 : m < 2.5 ? 1.0 - (1.0 - a) * (1.0 - b * uP0) : mix(a, a * b, uP0);
+  return vec4(r, 1.0);
+}`, {second:true});
+defFx('output', 'Sortie', [P('gain','luminosité',1,0,2,0.01)], `
+vec4 fx(vec2 q){ return vec4(T(q).rgb * uP0, 1.0); }`, {sink:true});
+
+const fxProgs = {};
+function fxProgram(type){
+  if(fxProgs[type]) return fxProgs[type];
+  const T = NODE_TYPES[type], p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, FX_HEAD + T.fx.body + '\nvoid main(){ o = fx(gl_FragCoord.xy / uRes); }'));
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const loc = {};
+  ['uIn','uIn2','uPrev','uRes','uTime','uKick','uP0','uP1','uP2','uP3'].forEach(k => loc[k] = gl.getUniformLocation(p, k));
+  return fxProgs[type] = {p, loc};
+}
+function renderFx(n, v, ctx){
+  const T = NODE_TYPES[n.type], pr = fxProgram(n.type), u = pr.loc;
+  const numeric = T.in.filter(p => p.type === 'num');
+  let dst = null;
+  if(!T.sink){
+    if(T.fx.feedback){                       // deux tampons en alternance : on lit l'image précédente
+      n.flip = n.flip ? 0 : 1;
+      dst = slot(n, 'buf' + n.flip);
+      n.prevT = slot(n, 'buf' + (1 - n.flip));
+    }else dst = slot(n, 'target');
+  }
+  bindTarget(dst);
+  gl.useProgram(pr.p);
+  gl.uniform2f(u.uRes, canvas.width, canvas.height);
+  gl.uniform1f(u.uTime, ctx.T); gl.uniform1f(u.uKick, ctx.A.kick);
+  numeric.slice(0, 4).forEach((p, k) => gl.uniform1f(u['uP' + k], v[p.k]));
+  useTex(2, v.in);  gl.uniform1i(u.uIn, 2);
+  useTex(3, v.in2); gl.uniform1i(u.uIn2, 3);
+  useTex(4, n.prevT ? n.prevT.tex : null); gl.uniform1i(u.uPrev, 4);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  if(T.fx.feedback) n.target = dst;
+}
+
+/* ── Rendu d'une image du graphe : seuls les nœuds reliés à une Sortie sont dessinés ── */
+function renderGraph(ctx){
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0.02, 0.02, 0.04, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+  GRAPH.order.forEach(id => {
+    const n = GRAPH.nodes[id], T = NODE_TYPES[n.type];
+    if(T.kind !== 'tex') return;
+    try{ T.render(n, inputValues(n), ctx); n.err = ''; }
+    catch(e){ n.err = String(e.message || e).split('\n')[0]; }
+  });
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.activeTexture(gl.TEXTURE0);
+}
+
+/* ═════════════════════ Éditeur de nœuds : affichage ═════════════════════
+   Les cartes flottent par-dessus le visuel. Tout est créé en JavaScript (styles + DOM). */
+
+const gstyle = document.createElement('style');
+gstyle.textContent = `
+#graph{position:fixed;inset:0;z-index:5;display:none;overflow:hidden;touch-action:none}
+#ui{z-index:6}
+#graph.open{display:block}
+#gveil{position:absolute;inset:0;background:rgba(5,6,10,.35)}
+#gworld{position:absolute;left:0;top:0;transform-origin:0 0}
+#gwires{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
+#gwires path{fill:none;stroke-width:2.4;stroke-linecap:round}
+#gwires path.num{stroke:#7cf3d0}#gwires path.tex{stroke:#ff7bd5}#gwires path.tmp{stroke-dasharray:6 5;opacity:.8}
+.gn{position:absolute;width:214px;background:rgba(14,16,24,.92);border:1px solid var(--line);border-radius:11px;
+  box-shadow:0 6px 24px rgba(0,0,0,.45);font-size:12px;user-select:none}
+.gn.sel{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc),0 6px 24px rgba(0,0,0,.45)}
+.gn.err{border-color:#ff4d6d}
+.gh{display:flex;align-items:center;justify-content:space-between;padding:6px 8px 6px 10px;cursor:grab;
+  border-bottom:1px solid var(--line);font-weight:600;letter-spacing:.04em}
+.gh.tex{background:linear-gradient(90deg,rgba(255,123,213,.22),transparent)}
+.gh.num{background:linear-gradient(90deg,rgba(124,243,208,.2),transparent)}
+.gx{cursor:pointer;color:var(--dim);padding:0 4px}.gx:hover{color:#ff8fa3}
+.gr{display:flex;align-items:center;gap:6px;padding:3px 8px;min-height:24px}
+.gr.out{justify-content:flex-end}
+.gl{color:var(--dim);white-space:nowrap}
+.gp{width:11px;height:11px;border-radius:50%;border:2px solid;flex:none;cursor:crosshair;margin:0;background:#0b0d14}
+.gr.in .gp{margin-left:-14px}.gr.out .gp{margin-right:-14px}
+.gp.num{border-color:#7cf3d0}.gp.tex{border-color:#ff7bd5}
+.gp.on.num{background:#7cf3d0}.gp.on.tex{background:#ff7bd5}
+.gp.hot{transform:scale(1.5)}
+.gr.in{padding-left:18px}.gr.out{padding-right:18px}
+.gr input[type=range]{flex:1;min-width:0;height:14px}
+.gr select{flex:1;min-width:0;padding:2px 4px;font-size:11.5px}
+.gv{min-width:34px;text-align:right;color:var(--txt);font-variant-numeric:tabular-nums}
+.gv.live{color:var(--acc)}
+.gerr{color:#ff8fa3;font-size:11px;padding:4px 10px;word-break:break-word}
+#gbar{position:absolute;top:12px;right:12px;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:calc(100vw - 24px)}
+#gmenu{position:absolute;top:50px;right:12px;display:none;background:var(--panel);backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:12px;padding:8px;width:230px;max-height:70vh;overflow:auto}
+#gmenu.open{display:block}
+#gmenu h4{margin:8px 4px 4px;font-size:10.5px;color:var(--dim);letter-spacing:.1em;text-transform:uppercase}
+#gmenu button{display:block;width:100%;text-align:left;margin-bottom:3px}
+#gtoast{position:absolute;left:50%;bottom:24px;transform:translateX(-50%);background:rgba(255,77,109,.92);color:#fff;
+  padding:7px 14px;border-radius:9px;font-size:12.5px;opacity:0;transition:opacity .25s;pointer-events:none}
+#gtoast.show{opacity:1}
+#gmarq{position:absolute;border:1px solid var(--acc);background:rgba(124,243,208,.1);display:none;pointer-events:none}
+#ghelp{position:absolute;left:12px;top:12px;color:var(--dim);font-size:11.5px;line-height:1.55;pointer-events:none;text-shadow:0 1px 6px #000}
+`;
+document.head.appendChild(gstyle);
+
+const gEl = document.createElement('div');
+gEl.id = 'graph';
+gEl.innerHTML = `<div id="gveil"></div>
+<div id="gworld"><svg id="gwires"></svg></div>
+<div id="ghelp"><kbd>Glisser</kbd> fond : sélection · <kbd>Espace</kbd>+glisser ou clic molette : déplacer · <kbd>Molette</kbd> : zoom<br>
+<kbd>Suppr</kbd> supprimer · <kbd>Ctrl</kbd>+<kbd>D</kbd> dupliquer · double-clic sur un point : couper le fil · <kbd>G</kbd> masquer</div>
+<div id="gbar"></div><div id="gmenu"></div><div id="gmarq"></div><div id="gtoast"></div>`;
+document.body.appendChild(gEl);
+const gworld = gEl.querySelector('#gworld'), gwires = gEl.querySelector('#gwires');
+const view = {x:0, y:0, s:1};
+const cardEls = {};
+const selection = new Set();
+
+function applyView(){ gworld.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.s})`; }
+let toastTimer;
+function toast(msg){
+  const t = gEl.querySelector('#gtoast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+const fmtV = v => (typeof v === 'number' && isFinite(v)) ? (Number.isInteger(v) || Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2)) : '–';
+
+/* ── Une carte = un nœud : titre, ports, propriétés éditables ── */
+function makePort(n, side, p){
+  const d = document.createElement('div');
+  d.className = 'gp ' + p.type + (side === 'in' && edgeInto(n.id, p.k) ? ' on' : '');
+  d.dataset.node = n.id; d.dataset.side = side; d.dataset.port = p.k; d.dataset.type = p.type;
+  d.title = p.label + ' (' + (p.type === 'tex' ? 'image' : 'nombre') + ')';
+  return d;
+}
+function makeControl(n, p, connected){
+  const wrap = document.createDocumentFragment();
+  if(p.options){
+    const sel = document.createElement('select');
+    p.options.forEach((o, i) => { const op = document.createElement('option'); op.value = i; op.textContent = o; sel.appendChild(op); });
+    sel.value = Math.round(n.props[p.k]); sel.disabled = connected;
+    sel.onchange = () => { n.props[p.k] = parseInt(sel.value); };
+    wrap.appendChild(sel);
+  }else{
+    const r = document.createElement('input');
+    r.type = 'range'; r.min = p.min; r.max = p.max; r.step = p.step || 0.01; r.value = n.props[p.k]; r.disabled = connected;
+    const v = document.createElement('span'); v.className = 'gv'; v.dataset.live = n.id + ':' + p.k;
+    v.textContent = fmtV(n.props[p.k]);
+    r.oninput = () => { n.props[p.k] = parseFloat(r.value); v.textContent = fmtV(n.props[p.k]); };
+    r.onpointerdown = e => e.stopPropagation();
+    wrap.appendChild(r); wrap.appendChild(v);
+  }
+  return wrap;
+}
+function renderCard(n){
+  const T = NODE_TYPES[n.type];
+  let el = cardEls[n.id];
+  if(!el){ el = cardEls[n.id] = document.createElement('div'); gworld.appendChild(el); }
+  el.className = 'gn' + (selection.has(n.id) ? ' sel' : '') + (n.err ? ' err' : '');
+  el.dataset.id = n.id; el.style.left = n.x + 'px'; el.style.top = n.y + 'px';
+  el.innerHTML = '';
+  const h = document.createElement('div');
+  h.className = 'gh ' + (T.kind === 'tex' ? 'tex' : 'num');
+  h.innerHTML = '<span></span><span class="gx" title="Supprimer">✕</span>';
+  h.firstChild.textContent = T.title;
+  el.appendChild(h);
+  T.out.forEach(p => {                                     // sorties (à droite)
+    const r = document.createElement('div'); r.className = 'gr out';
+    const l = document.createElement('span'); l.className = 'gl'; l.textContent = p.label; r.appendChild(l);
+    if(p.type === 'num'){ const v = document.createElement('span'); v.className = 'gv live'; v.dataset.out = n.id + ':' + p.k; r.appendChild(v); }
+    r.appendChild(makePort(n, 'out', p)); el.appendChild(r);
+  });
+  T.in.forEach(p => {                                      // entrées (à gauche)
+    const e = edgeInto(n.id, p.k), r = document.createElement('div'); r.className = 'gr in';
+    r.appendChild(makePort(n, 'in', p));
+    const l = document.createElement('span'); l.className = 'gl'; l.textContent = p.label; r.appendChild(l);
+    if(p.type === 'num'){
+      if(p.auto && !e){ const v = document.createElement('span'); v.className = 'gv live'; v.dataset.auto = n.id + ':' + p.k; v.style.flex = '1'; r.appendChild(v); }
+      else r.appendChild(makeControl(n, p, !!e));
+      if(e){ const v = r.querySelector('.gv'); if(v) v.classList.add('live'); }
+    }
+    el.appendChild(r);
+  });
+  (T.props || []).forEach(p => {                           // propriétés sans port
+    const r = document.createElement('div'); r.className = 'gr';
+    const l = document.createElement('span'); l.className = 'gl'; l.textContent = p.label; r.appendChild(l);
+    r.appendChild(makeControl(n, p, false)); el.appendChild(r);
+  });
+  if(n.err){ const e = document.createElement('div'); e.className = 'gerr'; e.textContent = n.err; el.appendChild(e); }
+}
+function renderAll(){
+  Object.keys(cardEls).forEach(id => { if(!GRAPH.nodes[id]){ cardEls[id].remove(); delete cardEls[id]; } });
+  Object.values(GRAPH.nodes).forEach(renderCard);
+  drawWires();
+}
+
+/* ── Fils ── */
+function portPos(id, side, k){
+  const el = cardEls[id] && cardEls[id].querySelector(`.gp[data-side="${side}"][data-port="${k}"]`);
+  if(!el) return null;
+  const r = el.getBoundingClientRect(), w = gworld.getBoundingClientRect();
+  return {x:(r.left + r.width / 2 - w.left) / view.s, y:(r.top + r.height / 2 - w.top) / view.s};
+}
+const wirePath = (a, b) => { const dx = Math.max(50, Math.abs(b.x - a.x) * 0.5); return `M${a.x},${a.y} C${a.x + dx},${a.y} ${b.x - dx},${b.y} ${b.x},${b.y}`; };
+let tmpWire = null;                                           // fil en cours de tracé : {a, b, type}
+function drawWires(){
+  let html = '';
+  GRAPH.edges.forEach(e => {
+    const a = portPos(e.from, 'out', e.fromPort), b = portPos(e.to, 'in', e.toPort);
+    if(a && b) html += `<path class="${portOf(GRAPH.nodes[e.from], 'out', e.fromPort).type}" d="${wirePath(a, b)}"/>`;
+  });
+  if(tmpWire) html += `<path class="tmp ${tmpWire.type}" d="${wirePath(tmpWire.a, tmpWire.b)}"/>`;
+  gwires.innerHTML = html;
+}
+
+/* Valeurs en direct (~15 fois par seconde) : sorties, entrées reliées ou automatiques */
+setInterval(() => {
+  if(!gEl.classList.contains('open')) return;
+  gEl.querySelectorAll('[data-out]').forEach(el => {
+    const [id, k] = el.dataset.out.split(':'), n = GRAPH.nodes[id];
+    if(n && n.out) el.textContent = fmtV(n.out[k]);
+  });
+  gEl.querySelectorAll('[data-auto]').forEach(el => {
+    const [id, k] = el.dataset.auto.split(':'); el.textContent = 'auto ' + fmtV(A[NODE_TYPES[GRAPH.nodes[id].type].in.find(p => p.k === k).auto]);
+  });
+  GRAPH.edges.forEach(e => {
+    const el = gEl.querySelector(`[data-live="${e.to}:${e.toPort}"]`), s = GRAPH.nodes[e.from];
+    if(el && s && s.out) el.textContent = fmtV(s.out[e.fromPort]);
+  });
+  Object.values(GRAPH.nodes).forEach(n => {                // une erreur de shader apparue ou disparue
+    const el = cardEls[n.id]; if(el && el.classList.contains('err') !== !!n.err) renderCard(n);
+  });
+}, 66);
+
+/* ═════════════════════ Éditeur de nœuds : interactions ═════════════════════ */
+
+const MENU = [
+  ['Sources & calcul', ['audio','slider','lfo','math','remap','smooth','threshold']],
+  ['Images', ['scene']],
+  ['Effets', ['mirror','zoom','rgb','feedback','pixel','color','glow','mix']],
+  ['Sortie', ['output']],
+];
+const gbar = gEl.querySelector('#gbar'), gmenu = gEl.querySelector('#gmenu'), gmarq = gEl.querySelector('#gmarq');
+function gButton(label, fn, title){
+  const b = document.createElement('button'); b.textContent = label; b.onclick = fn; if(title) b.title = title;
+  gbar.appendChild(b); return b;
+}
+function setEditor(open){ gEl.classList.toggle('open', open); gmenu.classList.remove('open'); if(open) renderAll(); syncModeButton(); }
+function setGraphMode(on){ GRAPH_MODE = on; syncModeButton(); }
+let modeBtn = null;
+function syncModeButton(){ if(modeBtn) modeBtn.classList.toggle('on', GRAPH_MODE); }
+
+/* Menu « Ajouter » */
+MENU.forEach(([title, types]) => {
+  const h = document.createElement('h4'); h.textContent = title; gmenu.appendChild(h);
+  types.forEach(t => {
+    const b = document.createElement('button'); b.textContent = NODE_TYPES[t].title;
+    b.onclick = () => {
+      const cx = (innerWidth / 2 - view.x) / view.s - 107 + (Math.random() - 0.5) * 60;
+      const cy = (innerHeight / 2 - view.y) / view.s - 60 + (Math.random() - 0.5) * 60;
+      const n = addNode(t, cx, cy); renderAll(); setSel([n.id]); gmenu.classList.remove('open'); scheduleSave();
+    };
+    gmenu.appendChild(b);
+  });
+});
+gButton('＋ Ajouter', () => gmenu.classList.toggle('open'));
+gButton('⤓ Exporter', () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([graphToJSON()], {type:'application/json'}));
+  a.download = 'ondine-graphe.json'; a.click();
+});
+const gimp = document.createElement('input'); gimp.type = 'file'; gimp.accept = '.json,application/json'; gimp.hidden = true;
+gimp.onchange = async e => {
+  try{ graphFromJSON(await e.target.files[0].text()); setSel([]); renderAll(); scheduleSave(); toast('Graphe importé'); }
+  catch(err){ toast('Import impossible : ' + err.message); }
+  gimp.value = '';
+};
+gEl.appendChild(gimp);
+gButton('⤒ Importer', () => gimp.click());
+gButton('↺ Graphe par défaut', () => { buildDefaultGraph(); setSel([]); renderAll(); scheduleSave(); });
+gButton('Scène simple', () => { setGraphMode(false); setEditor(false); }, 'Quitter le mode graphe et revenir au panneau classique');
+gButton('✕ Masquer (G)', () => setEditor(false));
+
+/* ── Sélection ── */
+function setSel(ids){
+  selection.clear(); ids.forEach(id => selection.add(id));
+  Object.keys(cardEls).forEach(id => cardEls[id].classList.toggle('sel', selection.has(id)));
+}
+const toWorld = (cx, cy) => ({x:(cx - view.x) / view.s, y:(cy - view.y) / view.s});
+
+/* ── Souris ── */
+let drag = null, spaceDown = false;
+gEl.addEventListener('pointerdown', e => {
+  if(e.target.closest('#gbar,#gmenu')) return;                     // les boutons gèrent eux-mêmes le menu
+  gmenu.classList.remove('open');
+  const t = e.target;
+  if(t.classList.contains('gx')){                                  // supprimer
+    const id = t.closest('.gn').dataset.id;
+    const ids = selection.has(id) ? [...selection] : [id];
+    ids.forEach(removeNode); setSel([]); renderAll(); scheduleSave(); return;
+  }
+  if(t.classList.contains('gp')){                                  // commencer un fil
+    const side = t.dataset.side, id = t.dataset.node, k = t.dataset.port, pos = portPos(id, side, k);
+    drag = {mode:'wire', id, side, k, type:t.dataset.type, pos};
+    tmpWire = {a:pos, b:pos, type:t.dataset.type}; e.preventDefault(); return;
+  }
+  const head = t.closest('.gh');
+  if(head){                                                        // déplacer (une carte ou toute la sélection)
+    const id = head.parentElement.dataset.id;
+    if(e.shiftKey){ selection.has(id) ? selection.delete(id) : selection.add(id); setSel([...selection]); return; }
+    if(!selection.has(id)) setSel([id]);
+    drag = {mode:'move', x0:e.clientX, y0:e.clientY, starts:[...selection].map(i => [i, GRAPH.nodes[i].x, GRAPH.nodes[i].y])};
+    head.style.cursor = 'grabbing'; e.preventDefault(); return;
+  }
+  if(t.closest('.gn')) return;                                     // clic dans une carte (curseur, liste…)
+  if(spaceDown || e.button === 1){                                 // déplacer la vue
+    drag = {mode:'pan', x0:e.clientX, y0:e.clientY, vx:view.x, vy:view.y}; e.preventDefault(); return;
+  }
+  drag = {mode:'marq', x0:e.clientX, y0:e.clientY, base:e.shiftKey ? [...selection] : []};
+  if(!e.shiftKey) setSel([]);
+  e.preventDefault();
+});
+window.addEventListener('pointermove', e => {
+  if(!drag) return;
+  if(drag.mode === 'move'){
+    const dx = (e.clientX - drag.x0) / view.s, dy = (e.clientY - drag.y0) / view.s;
+    drag.starts.forEach(([id, x, y]) => {
+      const n = GRAPH.nodes[id]; n.x = x + dx; n.y = y + dy;
+      cardEls[id].style.left = n.x + 'px'; cardEls[id].style.top = n.y + 'px';
+    });
+    drawWires();
+  }else if(drag.mode === 'pan'){
+    view.x = drag.vx + e.clientX - drag.x0; view.y = drag.vy + e.clientY - drag.y0; applyView();
+  }else if(drag.mode === 'wire'){
+    const w = toWorld(e.clientX, e.clientY);
+    tmpWire = drag.side === 'out' ? {a:drag.pos, b:w, type:drag.type} : {a:w, b:drag.pos, type:drag.type};
+    gEl.querySelectorAll('.gp.hot').forEach(p => p.classList.remove('hot'));
+    const hit = portUnder(e.clientX, e.clientY);
+    if(hit && hit.dataset.side !== drag.side) hit.classList.add('hot');
+    drawWires();
+  }else if(drag.mode === 'marq'){
+    const x = Math.min(e.clientX, drag.x0), y = Math.min(e.clientY, drag.y0), w = Math.abs(e.clientX - drag.x0), h = Math.abs(e.clientY - drag.y0);
+    Object.assign(gmarq.style, {display:'block', left:x + 'px', top:y + 'px', width:w + 'px', height:h + 'px'});
+    const ids = [...drag.base];
+    Object.keys(cardEls).forEach(id => {
+      const r = cardEls[id].getBoundingClientRect();
+      if(r.left < x + w && r.right > x && r.top < y + h && r.bottom > y && !ids.includes(id)) ids.push(id);
+    });
+    setSel(ids);
+  }
+});
+const portUnder = (x, y) => document.elementsFromPoint(x, y).find(el => el.classList && el.classList.contains('gp'));
+window.addEventListener('pointerup', e => {
+  if(!drag) return;
+  if(drag.mode === 'wire'){
+    const hit = portUnder(e.clientX, e.clientY);
+    if(hit && hit.dataset.side !== drag.side && hit.dataset.node !== drag.id){
+      const [o, i] = drag.side === 'out' ? [drag, {id:hit.dataset.node, k:hit.dataset.port}] : [{id:hit.dataset.node, k:hit.dataset.port}, drag];
+      const res = connect(o.id, o.k, i.id, i.k);
+      if(!res.ok) toast('Connexion refusée : ' + res.why); else scheduleSave();
+    }
+    tmpWire = null; renderAll();
+  }else if(drag.mode === 'move'){ gEl.querySelectorAll('.gh').forEach(h => h.style.cursor = ''); scheduleSave(); }
+  gmarq.style.display = 'none'; drag = null;
+});
+gEl.addEventListener('dblclick', e => {                            // couper le fil d'une entrée
+  const t = e.target;
+  if(t.classList.contains('gp') && t.dataset.side === 'in'){ disconnect(t.dataset.node, t.dataset.port); renderAll(); scheduleSave(); }
+});
+gEl.addEventListener('wheel', e => {                               // zoom autour du curseur
+  if(e.target.closest('#gmenu')) return;
+  e.preventDefault();
+  const k = Math.exp(-e.deltaY * 0.0012), ns = Math.max(0.3, Math.min(2, view.s * k)), f = ns / view.s;
+  view.x = e.clientX - (e.clientX - view.x) * f; view.y = e.clientY - (e.clientY - view.y) * f; view.s = ns;
+  applyView(); drawWires();
+}, {passive:false});
+
+/* ── Clavier ── */
+function duplicateSelection(){
+  const map = {};
+  [...selection].forEach(id => { const n = GRAPH.nodes[id]; map[id] = addNode(n.type, n.x + 36, n.y + 36, JSON.parse(JSON.stringify(n.props))).id; });
+  GRAPH.edges.slice().forEach(e => { if(map[e.from] && map[e.to]) connect(map[e.from], e.fromPort, map[e.to], e.toPort); });
+  renderAll(); setSel(Object.values(map)); scheduleSave();
+}
+addEventListener('keydown', e => {
+  if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const k = e.key.toLowerCase();
+  if(k === 'g' && GRAPH_MODE){ setEditor(!gEl.classList.contains('open')); return; }
+  if(!gEl.classList.contains('open')) return;
+  if(k === ' ') spaceDown = true;
+  else if(k === 'delete' || k === 'backspace'){ [...selection].forEach(removeNode); setSel([]); renderAll(); scheduleSave(); }
+  else if(k === 'd' && (e.ctrlKey || e.metaKey) && selection.size){ e.preventDefault(); duplicateSelection(); }
+  else if(k === 'a' && (e.ctrlKey || e.metaKey)){ e.preventDefault(); setSel(Object.keys(GRAPH.nodes)); }
+  else if(k === 'escape') gmenu.classList.remove('open');
+}, true);
+addEventListener('keyup', e => { if(e.key === ' ') spaceDown = false; });
+addEventListener('resize', drawWires);
+
+/* Sauvegarde automatique dans le navigateur */
+const GKEY = 'ondine.graph';
+let saveTimer;
+function scheduleSave(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { try{ localStorage.setItem(GKEY, graphToJSON()); }catch(e){} }, 400);
+}
+gEl.addEventListener('input', scheduleSave);
+gEl.addEventListener('change', scheduleSave);
+
+/* ═════════════════════ Éditeur de nœuds : démarrage ═════════════════════ */
+
+function buildDefaultGraph(){
+  GRAPH.nodes = {}; GRAPH.edges = []; GRAPH.nextId = 1; GRAPH.dirty = true;
+  const X = innerWidth > 1100 ? 390 : 30;                  // laisse la place au panneau de gauche
+  const sc = addNode('scene', X, 90, {scene:0, palette:0});
+  const rg = addNode('rgb', X + 270, 90, {amt:0.004});
+  const rm = addNode('remap', X + 270, 250, {lo:0, hi:0.04});
+  const au = addNode('audio', X, 440);
+  const out = addNode('output', X + 540, 90);
+  connect(sc.id, 'out', rg.id, 'in');
+  connect(rg.id, 'out', out.id, 'in');
+  connect(au.id, 'kick', rm.id, 'in');
+  connect(rm.id, 'out', rg.id, 'amt');
+}
+
+(function bootGraph(){
+  let ok = false;
+  try{
+    const t = localStorage.getItem(GKEY);
+    if(t){ graphFromJSON(t); ok = Object.values(GRAPH.nodes).some(n => NODE_TYPES[n.type].sink); }
+  }catch(e){ ok = false; }
+  if(!ok) buildDefaultGraph();
+  applyView(); renderAll();
+
+  // bouton dans le panneau principal
+  const ui = $('#ui'), row = document.createElement('div');
+  row.className = 'row';
+  modeBtn = document.createElement('button');
+  modeBtn.className = 'grow'; modeBtn.textContent = '🕸 Éditeur de nœuds';
+  modeBtn.title = 'Composer le visuel avec un graphe de nœuds (touche G pour afficher / masquer)';
+  modeBtn.onclick = () => {
+    if(!GRAPH_MODE){ setGraphMode(true); setEditor(true); }
+    else setEditor(!gEl.classList.contains('open'));
+  };
+  row.appendChild(modeBtn);
+  ui.insertBefore(row, ui.querySelector('label'));
+  syncModeButton();
+})();
 
 resize(); setPal(0); setScene(0);
 setStatus('Mode <b>démo</b> — charge un fichier, le micro ou l’audio d’un onglet.');
