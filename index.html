@@ -90,7 +90,7 @@
   <input id="fHi" type="range" min="0" max="1000" step="1" value="1000">
   <label class="check"><input type="checkbox" id="zoomSpec" checked> Zoomer le spectre sur la bande</label>
   <label>Réactivité du kick <span id="vKick"></span></label>
-  <input id="kickSens" type="range" min="0.5" max="2" step="0.05" value="1">
+  <input id="kickSens" type="range" min="0.5" max="3" step="0.05" value="1">
 
   <label>Scène</label>
   <div class="scenes" id="scenes"></div>
@@ -808,6 +808,7 @@ function ensureAudio(){
     analyser.minDecibels = -90; analyser.maxDecibels = -10;
     recDest = audioCtx.createMediaStreamDestination();
     freq = new Uint8Array(analyser.frequencyBinCount);
+    setupKickChain();
   }
   if(audioCtx.state === 'suspended') audioCtx.resume();
 }
@@ -818,6 +819,7 @@ function detach(){
 }
 function attach(node, monitor){
   node.connect(analyser);
+  node.connect(kAn);                                 // analyseur dédié à la détection du kick (sans lissage)
   node.connect(recDest);
   if(monitor) node.connect(audioCtx.destination);   // on entend le fichier, pas le micro
   curSrc = node;
@@ -925,7 +927,7 @@ function bandAvg(h0, h1){
 const FOCUS = [
   {n:'Tout'},
   {n:'Sub',      lo:20,   hi:60},
-  {n:'Kick',     lo:40,   hi:110},
+  {n:'Kick',     lo:40,   hi:140},
   {n:'Basses',   lo:60,   hi:250},
   {n:'Médiums',  lo:250,  hi:2000},
   {n:'Aigus',    lo:2000, hi:8000},
@@ -1000,8 +1002,76 @@ function drawMini(){
 const shape = v => Math.min(1, Math.pow(v, 1.6) * state.sens * 1.3);
 const follow = (cur, target) => cur + (target - cur) * (target > cur ? 0.5 : 0.12);
 
+/* ── Détection du kick ──
+   On cherche un NOUVEL apport d'énergie dans la bande suivie (par défaut 35–140 Hz, ou la bande choisie), pas un
+   niveau élevé. Chaque fréquence (bin FFT) est comparée à SON PROPRE minimum des ~140 dernières ms : une basse
+   tenue ou un accord stable n'apportent rien de neuf, alors qu'un kick fait monter plusieurs fréquences d'un coup
+   (balayage grave -> sub). Un kick posé sur une basse est donc détecté même s'il est noyé dans le mix. */
+let kAn, kFreq, kBand = [0, 0];
+const K = {hist:[], peak:1e-6, cool:0, lvl:0};
+function setupKickChain(){
+  kAn = audioCtx.createAnalyser(); kAn.fftSize = 4096; kAn.smoothingTimeConstant = 0;   // pas de lissage : on veut les attaques
+  kFreq = new Float32Array(kAn.frequencyBinCount);
+}
+function kickBins(lo, hi){                                  // magnitudes linéaires des bins de la bande
+  const N = freq.length, hz = SR() / 2 / N;
+  const b0 = Math.max(1, Math.ceil(lo / hz)), b1 = Math.min(N - 1, Math.floor(hi / hz));
+  const out = new Float32Array(Math.max(1, b1 - b0 + 1));
+  if(mode === 'demo' || !kAn){ for(let i = 0; i < out.length; i++) out[i] = Math.pow(freq[b0 + i] / 255, 3); }
+  else{
+    kAn.getFloatFrequencyData(kFreq);
+    for(let i = 0; i < out.length; i++) out[i] = Math.pow(10, Math.max(-140, kFreq[b0 + i]) / 20);
+  }
+  return out;
+}
+function detectKick(now, dt, lo, hi){
+  const cur = kickBins(lo, hi), h = K.hist, WIN = 0.14, n = cur.length;
+  while(h.length && now - h[0].t > WIN) h.shift();
+  if(h.length && h[h.length - 1].m.length !== n) h.length = 0;           // la bande a changé : on repart de zéro
+  const bases = new Float32Array(n), third = Math.max(1, Math.floor(n / 3));
+  let flux = 0, fLo = 0, fHi = 0, baseSum = 0, tot = 0;
+  for(let i = 0; i < n; i++){
+    let base = cur[i];
+    for(let j = 0; j < h.length; j++) if(h[j].m[i] < base) base = h[j].m[i];   // minimum récent de CE bin
+    bases[i] = base;
+    const d = h.length ? Math.max(0, cur[i] - base) : 0;
+    flux += d; if(i < third) fLo += d; if(i >= n - third) fHi += d;
+    baseSum += base; tot += cur[i];
+  }
+  const fresh = h.length > 0;
+  h.push({t:now, m:cur});
+  K.peak = Math.max(tot, K.peak * Math.exp(-dt / 5), 1e-6);            // plus forte énergie récente (oubliée en ~5 s)
+  K.cool -= dt; K.lvl *= Math.exp(-dt / 8);
+  if(K.t0 === undefined) K.t0 = now;
+  // largeur : un kick fait monter plusieurs fréquences à la fois, une note de basse en fait monter une seule
+  let rising = 0;
+  for(let i = 0; i < n; i++) if(cur[i] > bases[i] * 1.6 + K.peak * 0.002) rising++;
+  const ratio = fresh ? flux / (baseSum + K.peak * 0.03) : 0;         // part d'énergie « nouvelle » dans la bande
+  let os = rising >= Math.max(2, Math.round(0.4 * n)) ? ratio : 0;    // force de l'attaque
+  // forme : l'attaque d'un kick apporte de l'énergie dans le haut de la bande grave (début du balayage, « punch »),
+  // une note de basse ou un sub tenu l'apporte dans le bas. Ne s'applique qu'aux bandes graves (< 400 Hz).
+  if(hi <= 400 && flux > 0){
+    const w = 0.6 + 1.0 * (fHi / flux) - 0.5 * (fLo / flux);
+    os *= Math.min(1.4, Math.max(0.15, w));
+  }
+  const ks = state.kickSens || 1;
+  // seuil : au moins 0.3, et au moins la moitié de la force des kicks récents (s'adapte aux mixes qui « pompent »)
+  const thr = Math.max(0.3, 0.5 * K.lvl) / ks;
+  const floor = mode === 'demo' ? 0.03 : 0.004;                        // silence : on ne déclenche pas sur le bruit
+  const fire = os > thr && tot > K.peak * 0.2 && tot > floor && K.cool <= 0;
+  if(fire) K.cool = lo >= 3000 ? 0.07 : 0.12;                          // hi-hats : plus rapprochés
+  if(now - K.t0 > 1 && os > 0.3) K.lvl = Math.max(K.lvl, Math.min(os, 3));   // référence (la 1re seconde est ignorée : démarrage depuis le silence)
+  return fire;
+}
+
 function analyse(dt, t){
   if(mode === 'demo') fillDemo(t); else analyser.getByteFrequencyData(freq);
+
+  // vrais niveaux par bande, TOUJOURS indépendants (ils alimentent le nœud Audio) ; A.bass/mid/treble/level suivent, eux, la bande choisie
+  A.rb = follow(A.rb || 0, shape(bandAvg(25, 150)));
+  A.rm = follow(A.rm || 0, shape(bandAvg(150, 2000)));
+  A.rt = follow(A.rt || 0, shape(bandAvg(2000, 12000)));
+  A.rl = (A.rb + A.rm + A.rt) / 3;
 
   let drive;                                          // signal qui sert à détecter les kicks
   if(focus.on){
@@ -1021,14 +1091,11 @@ function analyse(dt, t){
     A.level  = follow(A.level,  (A.bass + A.mid + A.treble) / 3);
   }
 
-  // kick = le signal suivi dépasse nettement sa moyenne lente
-  const ks = state.kickSens || 1;
-  A.slow += (drive - A.slow) * Math.min(1, dt * 2.5);
-  A.cool -= dt;
-  if(drive > A.slow * (1 + 0.25 / ks) + 0.06 / ks && A.cool <= 0){
-    A.kick = 1;
-    A.cool = (focus.on && focus.lo >= 3000) ? 0.08 : 0.18;          // hi-hats : plus rapprochés
-  }
+  A.band = A.level;                                   // signal de la bande suivie (= niveau global si aucun préréglage)
+
+  // kick : front montant d'énergie dans la bande suivie (voir detectKick)
+  const kLo = focus.on ? focus.lo : 30, kHi = focus.on ? focus.hi : 140;
+  if(detectKick(t, dt, kLo, kHi)) A.kick = 1;
   A.kick *= Math.exp(-dt * 6);
 
   const zoomed = focus.on && focus.zoom;                    // le spectre des scènes ne montre que la bande
@@ -1174,8 +1241,11 @@ defNode('audio', {
   title:'Audio', kind:'num',
   in:[],
   out:[{k:'bass',label:'graves',type:'num'},{k:'mid',label:'médiums',type:'num'},{k:'treble',label:'aigus',type:'num'},
-       {k:'level',label:'niveau',type:'num'},{k:'kick',label:'kick',type:'num'}],
-  calc:(n, inp, ctx) => ({bass:ctx.A.bass, mid:ctx.A.mid, treble:ctx.A.treble, level:ctx.A.level, kick:ctx.A.kick})
+       {k:'level',label:'niveau',type:'num'},{k:'band',label:'bande suivie',type:'num'},{k:'kick',label:'kick',type:'num'}],
+  // graves / médiums / aigus / niveau = vrais niveaux, toujours distincts ; « bande suivie » = la plage choisie dans le panneau
+  calc:(n, inp, ctx) => { const A = ctx.A;
+    return {bass:A.rb !== undefined ? A.rb : A.bass, mid:A.rm !== undefined ? A.rm : A.mid, treble:A.rt !== undefined ? A.rt : A.treble,
+            level:A.rl !== undefined ? A.rl : A.level, band:A.band !== undefined ? A.band : A.level, kick:A.kick}; }
 });
 defNode('slider', {
   title:'Curseur', kind:'num',
@@ -1235,6 +1305,95 @@ defNode('threshold', {
       {k:'thr',label:'seuil',type:'num',def:0.5,min:0,max:1,step:0.01}],
   out:[{k:'out',label:'0 / 1',type:'num'}],
   calc:(n, inp) => ({out:inp.in >= inp.thr ? 1 : 0})
+});
+
+/* ── Nouveaux nœuds numériques ── */
+const MOUSE = {x:0.5, y:0.5, down:0};                      // mis à jour par l'éditeur (voir graph-ui.js)
+const edge = (n, key, v) => { const r = (n.st[key] || 0) < 0.5 && v >= 0.5; n.st[key] = v; return r; };   // front montant 0 -> 1
+const DIVS = ['×1','×2','×4','÷2'], DIVK = [1, 2, 4, 0.5];
+
+defNode('band', {
+  title:'Bande de fréquences', kind:'num',
+  in:[{k:'lo',label:'de (Hz)',type:'num',def:40,min:20,max:16000,step:1,log:true},
+      {k:'hi',label:'à (Hz)',type:'num',def:140,min:20,max:16000,step:1,log:true},
+      {k:'gain',label:'gain',type:'num',def:1,min:0.2,max:3,step:0.05}],
+  out:[{k:'out',label:'niveau',type:'num'},{k:'hit',label:'attaque',type:'num'}],
+  calc:(n, inp, ctx) => {
+    const lo = Math.min(inp.lo, inp.hi / 1.1), hi = Math.max(inp.hi, inp.lo * 1.1), st = n.st;
+    const raw = typeof bandAvg === 'function' ? bandAvg(lo, hi) : 0;
+    st.peak = Math.max(raw, (st.peak || 0.12) * Math.exp(-ctx.dt / 6), 0.12);          // normalisation automatique de la bande
+    st.floor = Math.min(raw, (st.floor === undefined ? raw : st.floor) + ctx.dt * 0.02);
+    const norm = Math.max(0, Math.min(1, (raw - st.floor) / (st.peak - st.floor + 0.05)));
+    st.slow = (st.slow === undefined ? raw : st.slow) + (raw - (st.slow === undefined ? raw : st.slow)) * (1 - Math.exp(-ctx.dt / 0.25));
+    st.on = Math.max((st.on || 0) * Math.exp(-ctx.dt * 7), raw > st.slow * 1.35 + 0.04 ? 1 : 0);   // impulsion à chaque montée brusque
+    return {out:Math.min(1, Math.pow(norm, 1.4) * inp.gain), hit:st.on};
+  }
+});
+defNode('tempo', {
+  title:'Tempo', kind:'num',
+  in:[{k:'bpm',label:'BPM',type:'num',def:128,min:40,max:220,step:1},
+      {k:'div',label:'division',type:'num',def:0,min:0,max:3,step:1,options:DIVS},
+      {k:'sync',label:'resynchro (kick)',type:'num',def:0,min:0,max:1,step:0.01}],
+  out:[{k:'phase',label:'phase 0→1',type:'num'},{k:'pulse',label:'impulsion',type:'num'}],
+  calc:(n, inp, ctx) => {
+    if(edge(n, 'sy', inp.sync)) n.st.ph = 0;                                        // un kick recale le battement
+    const prev = n.st.ph || 0, raw = prev + ctx.dt * inp.bpm / 60 * DIVK[Math.round(inp.div)];
+    n.st.ph = raw % 1;
+    if(raw >= 1 || n.st.first === undefined){ n.st.pv = 1; n.st.first = 1; }          // le tour est bouclé : impulsion franche, jamais ratée même à faible fps
+    else n.st.pv = (n.st.pv || 0) * Math.exp(-ctx.dt * 14);
+    return {phase:n.st.ph, pulse:n.st.pv};
+  }
+});
+defNode('mouse', {
+  title:'Souris', kind:'num', in:[],
+  out:[{k:'x',label:'x',type:'num'},{k:'y',label:'y',type:'num'},{k:'down',label:'bouton',type:'num'}],
+  calc:() => ({x:MOUSE.x, y:MOUSE.y, down:MOUSE.down})
+});
+defNode('random', {
+  title:'Aléatoire', kind:'num',
+  in:[{k:'rate',label:'vitesse (Hz)',type:'num',def:2,min:0.1,max:16,step:0.1},
+      {k:'smooth',label:'lissage',type:'num',def:0,min:0,max:1,step:0.01}],
+  out:[{k:'out',label:'sortie',type:'num'}],
+  calc:(n, inp, ctx) => {
+    const st = n.st; st.t = (st.t || 0) + ctx.dt;
+    if(st.v === undefined || st.t >= 1 / inp.rate){ st.t = 0; st.prev = st.v === undefined ? Math.random() : st.cur; st.v = Math.random(); st.cur = st.prev; }
+    const k = Math.min(1, st.t * inp.rate);                                         // avancement dans l'intervalle courant
+    st.cur = st.prev + (st.v - st.prev) * (inp.smooth > 0 ? Math.min(1, k / Math.max(0.02, inp.smooth)) : 1);
+    return {out:st.cur};
+  }
+});
+defNode('counter', {
+  title:'Compteur', kind:'num',
+  in:[{k:'trig',label:'déclencheur',type:'num',def:0,min:0,max:1,step:0.01},
+      {k:'steps',label:'pas',type:'num',def:4,min:2,max:16,step:1}],
+  out:[{k:'out',label:'position 0→1',type:'num'},{k:'idx',label:'numéro',type:'num'}],
+  calc:(n, inp) => {
+    const steps = Math.max(2, Math.round(inp.steps));
+    if(edge(n, 'tr', inp.trig)) n.st.i = ((n.st.i || 0) + 1) % steps;               // un pas à chaque impulsion
+    const i = (n.st.i || 0) % steps;
+    return {out:i / (steps - 1), idx:i};
+  }
+});
+defNode('delay', {
+  title:'Retard', kind:'num',
+  in:[{k:'in',label:'entrée',type:'num',def:0,min:0,max:1,step:0.01},
+      {k:'time',label:'durée (s)',type:'num',def:0.25,min:0,max:2,step:0.01}],
+  out:[{k:'out',label:'sortie',type:'num'}],
+  calc:(n, inp, ctx) => {
+    const st = n.st; st.clock = (st.clock || 0) + ctx.dt; st.buf = st.buf || [];
+    st.buf.push([st.clock, inp.in]);
+    while(st.buf.length > 2 && st.buf[1][0] < st.clock - 2.2) st.buf.shift();       // on garde ~2 s d'historique
+    const want = st.clock - inp.time; let v = st.buf[0][1];
+    for(let i = 0; i < st.buf.length; i++){ if(st.buf[i][0] <= want) v = st.buf[i][1]; else break; }
+    return {out:v};
+  }
+});
+defNode('select', {
+  title:'Sélecteur', kind:'num',
+  in:[{k:'a',label:'a',type:'num',def:0,min:0,max:1,step:0.01},{k:'b',label:'b',type:'num',def:1,min:0,max:1,step:0.01},
+      {k:'sel',label:'choix (<½ : a, ≥½ : b)',type:'num',def:0,min:0,max:1,step:0.01}],
+  out:[{k:'out',label:'sortie',type:'num'}],
+  calc:(n, inp) => ({out:inp.sel >= 0.5 ? inp.b : inp.a})
 });
 
 /* ── Gestion du graphe ── */
@@ -1424,6 +1583,12 @@ vec4 T(vec2 q){ return texture(uIn, q); }
 vec2 asp(vec2 q){ return (q - 0.5) * vec2(uRes.x / uRes.y, 1.0); }
 vec2 unasp(vec2 p){ return p / vec2(uRes.x / uRes.y, 1.0) + 0.5; }
 mat2 rot2(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p){
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p){ float v = 0.0, a = 0.5; for(int i = 0; i < 5; i++){ v += a * noise(p); p = p * 2.03 + vec2(17.1, 9.2); a *= 0.5; } return v; }
 vec3 hueShift(vec3 c, float h){
   float a = h * 6.28318, ca = cos(a), sa = sin(a); vec3 k = vec3(0.57735);
   return c * ca + cross(k, c) * sa + k * dot(k, c) * (1.0 - ca);
@@ -1489,16 +1654,120 @@ vec4 fx(vec2 q){
 defFx('output', 'Sortie', [P('gain','luminosité',1,0,2,0.01)], `
 vec4 fx(vec2 q){ return vec4(T(q).rgb * uP0, 1.0); }`, {sink:true});
 
+
+/* ── Nouveaux effets ── */
+defFx('blur', 'Flou', [P('rad','rayon',0.01,0.001,0.05,0.001)], `
+vec4 fx(vec2 q){
+  vec3 s = T(q).rgb; float w = 1.0; vec2 k = vec2(uRes.y / uRes.x, 1.0);
+  for(int i = 1; i <= 3; i++){
+    float r = uP0 * float(i) / 3.0;
+    for(int j = 0; j < 8; j++){ float a = float(j) * 0.785398 + float(i) * 0.5; s += T(q + vec2(cos(a), sin(a)) * r * k).rgb; w += 1.0; }
+  }
+  return vec4(s / w, 1.0);
+}`);
+defFx('wave', 'Vagues', [P('amp','amplitude',0.02,0,0.1,0.001), P('freq','fréquence',10,1,40,0.1), P('speed','vitesse',1,0,6,0.01), P('ang','angle',0,0,6.28,0.01)], `
+vec4 fx(vec2 q){
+  vec2 p = asp(q), d = vec2(cos(uP3), sin(uP3)), n = vec2(-d.y, d.x);
+  float w = sin(dot(p, n) * uP1 + uTime * uP2) * uP0;
+  return T(q + d * w * vec2(uRes.y / uRes.x, 1.0));
+}`);
+defFx('grain', 'Grain', [P('amt','quantité',0.2,0,1,0.01), P('size','grosseur',1,1,8,1)], `
+vec4 fx(vec2 q){
+  float n = hash(floor(gl_FragCoord.xy / uP1) + fract(uTime * 7.0) * 100.0) - 0.5;
+  return vec4(max(T(q).rgb + n * uP0, 0.0), 1.0);
+}`);
+defFx('vignette', 'Vignette', [P('str','force',0.8,0,2,0.01), P('soft','douceur',0.5,0.05,1,0.01)], `
+vec4 fx(vec2 q){
+  float v = 1.0 - uP0 * smoothstep(0.3, 0.3 + uP1 * 1.2, length(asp(q)));
+  return vec4(T(q).rgb * max(v, 0.0), 1.0);
+}`);
+defFx('invert', 'Inverser', [P('amt','quantité',1,0,1,0.01)], `
+vec4 fx(vec2 q){ vec3 c = T(q).rgb; return vec4(mix(c, 1.0 - c, uP0), 1.0); }`);
+defFx('strips', 'Bandes décalées', [P('bands','bandes',24,4,80,1), P('amt','décalage',0.05,0,0.3,0.001), P('speed','changements/s',10,0,30,0.5)], `
+vec4 fx(vec2 q){
+  float band = floor(q.y * floor(uP0 + 0.5)), st = floor(uTime * uP2);
+  float on = step(0.55, hash(vec2(band, st)));
+  return T(vec2(q.x + (hash(vec2(band + 7.0, st)) - 0.5) * 2.0 * uP1 * on, q.y));
+}`);
+defFx('edge', 'Contours', [P('str','force',2,0.2,6,0.01), P('mix','mélange',1,0,1,0.01)], `
+float L(vec2 p){ return dot(T(p).rgb, vec3(0.299, 0.587, 0.114)); }
+vec4 fx(vec2 q){
+  vec2 e = 1.5 / uRes;
+  float gx = -L(q + vec2(-e.x, -e.y)) - 2.0 * L(q + vec2(-e.x, 0.0)) - L(q + vec2(-e.x, e.y)) + L(q + vec2(e.x, -e.y)) + 2.0 * L(q + vec2(e.x, 0.0)) + L(q + vec2(e.x, e.y));
+  float gy = -L(q + vec2(-e.x, -e.y)) - 2.0 * L(q + vec2(0.0, -e.y)) - L(q + vec2(e.x, -e.y)) + L(q + vec2(-e.x, e.y)) + 2.0 * L(q + vec2(0.0, e.y)) + L(q + vec2(e.x, e.y));
+  float g = clamp(length(vec2(gx, gy)) * uP0, 0.0, 1.0);
+  vec3 c = T(q).rgb;
+  return vec4(mix(c, c * g * 2.0 + g * 0.3, uP1), 1.0);
+}`);
+defFx('tile', 'Mosaïque', [P('n','répétitions',2,1,8,1), P('rot','rotation',0,-3.14,3.14,0.01)], `
+vec4 fx(vec2 q){
+  vec2 qq = unasp(rot2(uP1) * asp(q));
+  return T(1.0 - abs(fract(qq * floor(uP0 + 0.5)) * 2.0 - 1.0));
+}`);
+defFx('poster', 'Postérisation', [P('lev','niveaux',5,2,16,1), P('mix','mélange',1,0,1,0.01)], `
+vec4 fx(vec2 q){ vec3 c = T(q).rgb, p = floor(c * uP0 + 0.5) / uP0; return vec4(mix(c, p, uP1), 1.0); }`);
+
+/* ── Générateurs : pas d'image en entrée, une palette en propriété ── */
+const GEN_HEAD = FX_HEAD + `
+uniform vec3 uGrad[5]; uniform sampler2D uImg; uniform float uImgAspect;
+vec3 pal(float t){
+  t = fract(t) * 5.0; int i = min(int(floor(t)), 4); float f = fract(t); f = f * f * (3.0 - 2.0 * f);
+  return mix(uGrad[i], uGrad[(i + 1) % 5], f);
+}
+`;
+function defGen(type, title, params, body, opts){
+  opts = opts || {};
+  defNode(type, {
+    title, kind:'tex', in:params,
+    props:opts.nopal ? [] : [{k:'palette',label:'palette',def:0,options:PALETTES.map(p => p.n)}],
+    out:[{k:'out',label:'image',type:'tex'}],
+    fx:{body, head:GEN_HEAD, gen:true, prog:null},
+    render:(n, v, ctx) => renderFx(n, v, ctx)
+  });
+}
+defGen('gradient', 'Dégradé', [P('mode','type',0,0,2,1,['linéaire','radial','conique']), P('ang','angle',0,0,6.28,0.01), P('scale','échelle',1,0.2,4,0.01), P('speed','vitesse',0.2,0,2,0.01)], `
+vec4 fx(vec2 q){
+  vec2 p = asp(q); float m = floor(uP0 + 0.5), v;
+  if(m < 0.5) v = dot(p, vec2(cos(uP1), sin(uP1))) * uP2;
+  else if(m < 1.5) v = length(p) * 2.0 * uP2;
+  else v = (atan(p.y, p.x) + uP1) / 6.28318 * max(1.0, floor(uP2 + 0.5));
+  return vec4(pal(v + uTime * uP3 * 0.2) * (0.7 + 0.5 * uKick), 1.0);
+}`);
+defGen('shapes', 'Formes', [P('shape','forme',0,0,4,1,['cercle','anneau','carré','points','rayures']), P('size','taille',0.5,0.05,1.5,0.01), P('count','nombre',4,1,16,1), P('soft','douceur',0.3,0.01,1,0.01)], `
+vec4 fx(vec2 q){
+  vec2 p = asp(q) * 2.0; float m = floor(uP0 + 0.5), n = max(1.0, floor(uP2 + 0.5)), sz = uP1 * (1.0 + 0.4 * uKick), d;
+  float r = clamp(sz * 0.5, 0.05, 0.48);
+  if(m < 0.5) d = length(p) - sz;
+  else if(m < 1.5) d = abs(length(p) - sz) - sz * 0.12;
+  else if(m < 2.5){ vec2 a = abs(p); d = max(a.x, a.y) - sz; }
+  else if(m < 3.5){ vec2 g = fract(p * n * 0.5 + 0.5 + vec2(uTime * 0.05)) - 0.5; d = (length(g) - r) * 2.0 / n; }
+  else d = (abs(fract(p.x * n * 0.5 + uTime * 0.1) - 0.5) - r) * 2.0 / n;
+  float a = smoothstep(uP3 * 0.2 + 0.002, 0.0, d);
+  return vec4(pal(length(p) * 0.6 + uTime * 0.05) * a * (0.8 + 0.6 * uKick) + pal(0.3) * 0.03, 1.0);
+}`);
+defGen('noisegen', 'Bruit animé', [P('scale','échelle',3,0.5,12,0.01), P('speed','vitesse',0.3,0,2,0.01), P('det','détail',0.5,0,1,0.01), P('con','contraste',1,0.3,3,0.01)], `
+vec4 fx(vec2 q){
+  vec2 p = asp(q) * uP0; float t = uTime * uP1;
+  float f = mix(noise(p + t), fbm(p + vec2(t, -t)), uP2);
+  f = clamp((f - 0.5) * uP3 + 0.5, 0.0, 1.0);
+  return vec4(pal(f + uTime * 0.02) * (0.25 + f * (0.9 + 0.6 * uKick)), 1.0);
+}`);
+defGen('imagegen', 'Image', [P('zoom','zoom',1,0.3,3,0.01), P('rot','rotation',0,-3.14,3.14,0.01), P('x','décalage x',0,-1,1,0.01), P('y','décalage y',0,-1,1,0.01)], `
+vec4 fx(vec2 q){
+  vec2 p = rot2(uP1) * (asp(q) / uP0) + vec2(uP2, uP3) * 0.5;
+  return vec4(texture(uImg, vec2(p.x / uImgAspect, p.y) + 0.5).rgb, 1.0);
+}`, {nopal:true});
+
 const fxProgs = {};
 function fxProgram(type){
   if(fxProgs[type]) return fxProgs[type];
   const T = NODE_TYPES[type], p = gl.createProgram();
   gl.attachShader(p, compile(gl.VERTEX_SHADER, VERT));
-  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, FX_HEAD + T.fx.body + '\nvoid main(){ o = fx(gl_FragCoord.xy / uRes); }'));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, (T.fx.head || FX_HEAD) + T.fx.body + '\nvoid main(){ o = fx(gl_FragCoord.xy / uRes); }'));
   gl.linkProgram(p);
   if(!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
   const loc = {};
-  ['uIn','uIn2','uPrev','uRes','uTime','uKick','uP0','uP1','uP2','uP3'].forEach(k => loc[k] = gl.getUniformLocation(p, k));
+  ['uIn','uIn2','uPrev','uRes','uTime','uKick','uP0','uP1','uP2','uP3','uGrad','uImg','uImgAspect'].forEach(k => loc[k] = gl.getUniformLocation(p, k));
   return fxProgs[type] = {p, loc};
 }
 function renderFx(n, v, ctx){
@@ -1520,6 +1789,11 @@ function renderFx(n, v, ctx){
   useTex(2, v.in);  gl.uniform1i(u.uIn, 2);
   useTex(3, v.in2); gl.uniform1i(u.uIn2, 3);
   useTex(4, n.prevT ? n.prevT.tex : null); gl.uniform1i(u.uPrev, 4);
+  if(T.fx.gen){                                                          // générateurs : palette (+ image perso)
+    PALETTES[Math.round(n.props.palette || 0) % PALETTES.length].s.forEach((h, k) => gradCache.set(hexToRgb(h), k * 3));
+    gl.uniform3fv(u.uGrad, gradCache);
+    if(u.uImg){ useTex(1, imgTex); gl.uniform1i(u.uImg, 1); gl.uniform1f(u.uImgAspect, imgAspect); }
+  }
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   if(T.fx.feedback) n.target = dst;
 }
@@ -1551,6 +1825,8 @@ gstyle.textContent = `
 #gworld{position:absolute;left:0;top:0;transform-origin:0 0}
 #gwires{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
 #gwires path{fill:none;stroke-width:2.4;stroke-linecap:round}
+#gwires path.hit{stroke:transparent;stroke-width:16;pointer-events:stroke;cursor:pointer}
+#gwires path.hit:hover + path{stroke-width:4.5;filter:brightness(1.35)}
 #gwires path.num{stroke:#7cf3d0}#gwires path.tex{stroke:#ff7bd5}#gwires path.tmp{stroke-dasharray:6 5;opacity:.8}
 .gn{position:absolute;width:214px;background:rgba(14,16,24,.92);border:1px solid var(--line);border-radius:11px;
   box-shadow:0 6px 24px rgba(0,0,0,.45);font-size:12px;user-select:none}
@@ -1594,7 +1870,7 @@ gEl.id = 'graph';
 gEl.innerHTML = `<div id="gveil"></div>
 <div id="gworld"><svg id="gwires"></svg></div>
 <div id="ghelp"><kbd>Glisser</kbd> fond : sélection · <kbd>Espace</kbd>+glisser ou clic molette : déplacer · <kbd>Molette</kbd> : zoom<br>
-<kbd>Suppr</kbd> supprimer · <kbd>Ctrl</kbd>+<kbd>D</kbd> dupliquer · double-clic sur un point : couper le fil · <kbd>G</kbd> masquer</div>
+<kbd>Suppr</kbd> supprimer · <kbd>Ctrl</kbd>+<kbd>D</kbd> dupliquer · double-clic sur un fil : le couper · <kbd>G</kbd> masquer</div>
 <div id="gbar"></div><div id="gmenu"></div><div id="gmarq"></div><div id="gtoast"></div>`;
 document.body.appendChild(gEl);
 const gworld = gEl.querySelector('#gworld'), gwires = gEl.querySelector('#gwires');
@@ -1628,10 +1904,16 @@ function makeControl(n, p, connected){
     wrap.appendChild(sel);
   }else{
     const r = document.createElement('input');
-    r.type = 'range'; r.min = p.min; r.max = p.max; r.step = p.step || 0.01; r.value = n.props[p.k]; r.disabled = connected;
+    const lg = !!p.log, L0 = Math.log(p.min), L1 = Math.log(p.max);
+    const posOf = x => Math.round(1000 * (Math.log(Math.max(p.min, x)) - L0) / (L1 - L0));
+    const hzOf = q => Math.round(Math.exp(L0 + (q / 1000) * (L1 - L0)));
+    const fmtHz = x => x >= 1000 ? (x / 1000).toFixed(1) + ' k' : Math.round(x) + '';
+    r.type = 'range'; r.disabled = connected;
+    if(lg){ r.min = 0; r.max = 1000; r.step = 1; r.value = posOf(n.props[p.k]); }
+    else { r.min = p.min; r.max = p.max; r.step = p.step || 0.01; r.value = n.props[p.k]; }
     const v = document.createElement('span'); v.className = 'gv'; v.dataset.live = n.id + ':' + p.k;
-    v.textContent = fmtV(n.props[p.k]);
-    r.oninput = () => { n.props[p.k] = parseFloat(r.value); v.textContent = fmtV(n.props[p.k]); };
+    v.textContent = lg ? fmtHz(n.props[p.k]) : fmtV(n.props[p.k]);
+    r.oninput = () => { n.props[p.k] = lg ? hzOf(parseFloat(r.value)) : parseFloat(r.value); v.textContent = lg ? fmtHz(n.props[p.k]) : fmtV(n.props[p.k]); };
     r.onpointerdown = e => e.stopPropagation();
     wrap.appendChild(r); wrap.appendChild(v);
   }
@@ -1692,7 +1974,10 @@ function drawWires(){
   let html = '';
   GRAPH.edges.forEach(e => {
     const a = portPos(e.from, 'out', e.fromPort), b = portPos(e.to, 'in', e.toPort);
-    if(a && b) html += `<path class="${portOf(GRAPH.nodes[e.from], 'out', e.fromPort).type}" d="${wirePath(a, b)}"/>`;
+    if(a && b){
+      const d = wirePath(a, b), ty = portOf(GRAPH.nodes[e.from], 'out', e.fromPort).type;
+      html += `<path class="hit" data-to="${e.to}" data-port="${e.toPort}" d="${d}"/><path class="${ty}" d="${d}"/>`;   // zone de clic large + trait visible
+    }
   });
   if(tmpWire) html += `<path class="tmp ${tmpWire.type}" d="${wirePath(tmpWire.a, tmpWire.b)}"/>`;
   gwires.innerHTML = html;
@@ -1717,12 +2002,17 @@ setInterval(() => {
   });
 }, 66);
 
+/* Position de la souris pour la carte « Souris » */
+addEventListener('pointermove', e => { MOUSE.x = e.clientX / innerWidth; MOUSE.y = 1 - e.clientY / innerHeight; });
+addEventListener('pointerdown', () => { MOUSE.down = 1; });
+addEventListener('pointerup', () => { MOUSE.down = 0; });
+
 /* ═════════════════════ Éditeur de nœuds : interactions ═════════════════════ */
 
 const MENU = [
-  ['Sources & calcul', ['audio','slider','lfo','math','remap','smooth','threshold']],
-  ['Images', ['scene']],
-  ['Effets', ['mirror','zoom','rgb','feedback','pixel','color','glow','mix']],
+  ['Sources & calcul', ['audio','band','tempo','mouse','slider','lfo','random','math','remap','smooth','delay','counter','select','threshold']],
+  ['Images', ['scene','gradient','shapes','noisegen','imagegen']],
+  ['Effets', ['mirror','zoom','rgb','feedback','pixel','color','glow','mix','blur','wave','grain','vignette','invert','strips','edge','tile','poster']],
   ['Sortie', ['output']],
 ];
 const gbar = gEl.querySelector('#gbar'), gmenu = gEl.querySelector('#gmenu'), gmarq = gEl.querySelector('#gmarq');
@@ -1779,6 +2069,7 @@ gEl.addEventListener('pointerdown', e => {
   if(e.target.closest('#gbar,#gmenu')) return;                     // les boutons gèrent eux-mêmes le menu
   gmenu.classList.remove('open');
   const t = e.target;
+  if(t.classList.contains('hit')) return;                          // clic sur un fil : pas de sélection au cadre
   if(t.classList.contains('gx')){                                  // supprimer
     const id = t.closest('.gn').dataset.id;
     const ids = selection.has(id) ? [...selection] : [id];
@@ -1839,17 +2130,21 @@ window.addEventListener('pointerup', e => {
   if(!drag) return;
   if(drag.mode === 'wire'){
     const hit = portUnder(e.clientX, e.clientY);
+    let changed = false;
     if(hit && hit.dataset.side !== drag.side && hit.dataset.node !== drag.id){
       const [o, i] = drag.side === 'out' ? [drag, {id:hit.dataset.node, k:hit.dataset.port}] : [{id:hit.dataset.node, k:hit.dataset.port}, drag];
       const res = connect(o.id, o.k, i.id, i.k);
-      if(!res.ok) toast('Connexion refusée : ' + res.why); else scheduleSave();
+      if(!res.ok) toast('Connexion refusée : ' + res.why); else { scheduleSave(); changed = true; }
     }
-    tmpWire = null; renderAll();
+    tmpWire = null;
+    gEl.querySelectorAll('.gp.hot').forEach(p => p.classList.remove('hot'));
+    changed ? renderAll() : drawWires();            // ne pas reconstruire les cartes sans raison : ça annulerait un double-clic
   }else if(drag.mode === 'move'){ gEl.querySelectorAll('.gh').forEach(h => h.style.cursor = ''); scheduleSave(); }
   gmarq.style.display = 'none'; drag = null;
 });
-gEl.addEventListener('dblclick', e => {                            // couper le fil d'une entrée
+gEl.addEventListener('dblclick', e => {                            // couper un fil (double-clic dessus, ou sur son point d'entrée)
   const t = e.target;
+  if(t.classList.contains('hit')){ disconnect(t.dataset.to, t.dataset.port); renderAll(); scheduleSave(); return; }
   if(t.classList.contains('gp') && t.dataset.side === 'in'){ disconnect(t.dataset.node, t.dataset.port); renderAll(); scheduleSave(); }
 });
 gEl.addEventListener('wheel', e => {                               // zoom autour du curseur
