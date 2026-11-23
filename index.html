@@ -17,6 +17,13 @@
     background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
     border:1px solid var(--line);border-radius:14px;padding:14px;
     transition:opacity .35s,transform .35s;max-height:calc(100vh - 32px);overflow:auto}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  #uiClose{padding:2px 9px;font-size:13px;line-height:1.4}
+  #uiOpen{position:fixed;left:16px;bottom:16px;display:none;padding:9px 14px;border-radius:12px;
+    background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);z-index:6;transition:opacity .35s}
+  body.collapsed #ui{display:none}
+  body.collapsed #uiOpen{display:block}
+  body.idle #uiOpen{opacity:0;pointer-events:none}
   body.idle #ui{opacity:0;transform:translateY(8px);pointer-events:none}
   body.idle{cursor:none}
   h1{margin:0 0 2px;font-size:15px;letter-spacing:.18em;text-transform:uppercase}
@@ -43,7 +50,7 @@
   .small{padding:5px 9px;font-size:12px}
   .chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
   .chips button{padding:4px 10px;font-size:12px;border-radius:999px}
-  #mini{width:100%;height:56px;display:block;border:1px solid var(--line);border-radius:9px;background:rgba(0,0,0,.25);margin-bottom:8px}
+  #mini{position:static;width:100%;height:56px;display:block;border:1px solid var(--line);border-radius:9px;background:rgba(0,0,0,.25);margin-bottom:8px}
   label.check{display:flex;align-items:center;gap:6px;margin:6px 0 8px;color:var(--txt);font-size:12px;letter-spacing:0;text-transform:none}
   #imgBox{display:none;border:1px solid var(--line);border-radius:10px;padding:8px;margin-bottom:8px}
   #imgBox label:first-child{margin-top:0}
@@ -83,8 +90,9 @@
 </div>
 <div id="drop">Dépose un fichier audio,<br>une image ou une vidéo</div>
 
+<button id="uiOpen" title="Afficher le panneau (H)">☰ Ondine</button>
 <div id="ui">
-  <h1>Ondine</h1>
+  <div class="top"><h1>Ondine</h1><button id="uiClose" title="Masquer le panneau (H)" aria-label="Masquer le panneau">✕</button></div>
   <div class="sub">Visuels temps réel pilotés par le son</div>
 
   <div class="row">
@@ -574,9 +582,219 @@ void main(){
   vec3 col = pal(trap * 2.0 + t) * exp(-trap * 1.5) * (0.8 + uLevel * 2.0);
   col += pal(t + 0.4) * uKick * 0.25 * exp(-trap * 4.0);
   o = finish(col, uvOf());
+}`},
+{ name:'Interférences', body:`
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  float v = 0.0;
+  for(int i = 0; i < 5; i++){
+    float fi = float(i);
+    vec2 c = 0.5 * vec2(cos(t * 0.3 + fi * 1.7), sin(t * 0.4 + fi * 2.3));
+    v += sin(length(uv - c) * (18.0 + uBass * 14.0) - t * 3.0 + fi);
+  }
+  float m = 0.5 + 0.2 * v;
+  vec3 col = pal(m * 0.9 + t * 0.03) * (0.25 + pow(clamp(m, 0.0, 1.0), 3.0) * 2.2) * (0.8 + uLevel);
+  col += pal(t * 0.1) * uKick * 0.35 * (1.0 - length(uv));
+  o = finish(col, uv);
+}`},
+{ name:'Cellules', body:`
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  vec2 p = uv * (4.0 + uBass * 1.5) + vec2(t * 0.1, 0.0);
+  vec2 g = floor(p), f = fract(p);
+  float d1 = 8.0, d2 = 8.0; vec2 id = vec2(0.0);
+  for(int j = -1; j <= 1; j++) for(int i = -1; i <= 1; i++){
+    vec2 b = vec2(float(i), float(j));
+    vec2 r = vec2(hash(g + b), hash(g + b + 7.3));
+    r = 0.5 + 0.45 * sin(t * 0.8 + 6.2831 * r);
+    vec2 d = b + r - f;
+    float dd = dot(d, d);
+    if(dd < d1){ d2 = d1; d1 = dd; id = g + b; } else if(dd < d2) d2 = dd;
+  }
+  float e = sqrt(d2) - sqrt(d1);
+  float h = hash(id);
+  float line = 1.0 - smoothstep(0.0, 0.08 + uKick * 0.12, e);
+  float s = spec(h * 0.6);
+  vec3 col = pal(h + t * 0.05) * (0.2 + s * 1.8) + pal(h + 0.5) * line * (0.7 + uKick);
+  o = finish(col, uv);
+}`},
+{ name:'Anneau spectral', body:`
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  uv *= rot(t * 0.1);
+  float r = length(uv), a = atan(uv.y, uv.x);
+  float x = abs(a) / 3.14159;
+  float s = spec(x * 0.8);
+  float R = 0.24 + uBass * 0.08 + uKick * 0.05;
+  float d = r - R, outer = s * 0.42;
+  float bar = smoothstep(-0.004, 0.004, d) * (1.0 - smoothstep(outer - 0.01, outer + 0.004, d));
+  bar *= smoothstep(0.5, 0.36, abs(fract(x * 64.0) - 0.5));
+  vec3 col = pal(x + t * 0.05) * bar * 1.6;
+  col += pal(t * 0.07) * exp(-abs(d) * 70.0) * 0.8;
+  col += pal(t * 0.07 + 0.5) * exp(-r * 3.0) * uKick * 0.9;
+  o = finish(col, uv);
+}`},
+{ name:'Aurore', body:`
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime * 0.25;
+  vec3 col = vec3(0.0);
+  for(int i = 0; i < 4; i++){
+    float fi = float(i);
+    float c = fbm(vec2(uv.x * (1.0 + fi * 0.4) * 1.5 + t * (1.0 + fi * 0.3), fi * 3.1 + t * 0.3));
+    float yy = uv.y - (0.15 * fi - 0.2) - (c - 0.5) * 0.6 * (0.6 + uMid);
+    col += pal(fi * 0.2 + c + t * 0.1) * exp(-pow(abs(yy) * 5.0, 1.5)) * (0.5 + uLevel * 1.5) * (0.7 + 0.5 * c);
+  }
+  col += vec3(step(0.997, hash(floor(uv * 220.0)))) * (0.4 + uTreble * 2.0) * smoothstep(-0.3, 0.4, uv.y);
+  col += pal(uTime * 0.05) * uKick * 0.12;
+  o = finish(col, uv);
+}`},
+{ name:'Néon', body:`
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  float d1 = 10.0, d2 = 10.0;
+  for(int i = 0; i < 90; i++){
+    float s = float(i) / 89.0 * 6.28318;
+    vec2 p = 0.42 * vec2(sin(3.0 * s + t * 0.5 + uMid * 2.0), sin(2.0 * s + t * 0.3 + uBass));
+    vec2 q = 0.30 * vec2(sin(5.0 * s - t * 0.4), sin(4.0 * s + t * 0.35 + 1.0)) * (1.0 + uKick * 0.3);
+    d1 = min(d1, length(uv - p));
+    d2 = min(d2, length(uv - q));
+  }
+  vec3 col = pal(t * 0.05) * 0.006 / (d1 + 0.004) * (1.0 + uLevel * 2.0)
+           + pal(t * 0.05 + 0.5) * 0.005 / (d2 + 0.004) * (1.0 + uTreble * 3.0);
+  o = finish(col, uv);
+}`},
+{ name:'Synthwave', body:`
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  float hz = -0.05;
+  vec3 col = pal(0.7) * 0.15 * (1.0 - (uv.y - hz));
+  if(uv.y < hz){
+    float z = 0.35 / (hz - uv.y);
+    float x = uv.x * z * 1.3;
+    float lx = smoothstep(0.46, 0.5, abs(fract(x) - 0.5));
+    float lz = smoothstep(0.46, 0.5, abs(fract(z - t * 1.5) - 0.5));
+    col += pal(0.3 + t * 0.03) * max(lx, lz) * exp(-z * 0.12) * (0.8 + uLevel * 1.5);
+  }else{
+    vec2 c = uv - vec2(0.0, 0.18);
+    float r = length(c), R = 0.22 + 0.03 * uBass + 0.02 * uKick;
+    float sun = smoothstep(R, R - 0.01, r);
+    float cut = smoothstep(0.0, 0.02, sin(uv.y * 90.0 - t * 3.0) + (0.12 - uv.y) * 8.0);
+    col += mix(pal(0.1), pal(0.6), clamp((uv.y - hz) / 0.4, 0.0, 1.0)) * sun * cut * 1.4;
+    col += pal(0.1) * exp(-(r - R) * 6.0) * 0.25 * step(R, r);
+  }
+  col += pal(0.5) * exp(-abs(uv.y - hz) * 40.0) * (0.4 + uKick);
+  o = finish(col, uv);
+}`},
+{ name:'Burning Ship', body:`
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  float scale = 0.5 * exp(-2.0 * (0.5 + 0.5 * sin(t * 0.12)));
+  vec2 c = vec2(-1.75, -0.035) + (uv * rot(0.1 * sin(t * 0.1))) * scale;
+  vec2 z = vec2(0.0);
+  float n = 0.0; bool esc = false;
+  for(int k = 0; k < 90; k++){
+    z = vec2(abs(z.x), abs(z.y));
+    z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+    if(dot(z, z) > 256.0){ n = float(k); esc = true; break; }
+  }
+  vec3 col = vec3(0.0);
+  if(esc){
+    float sm = n - log2(log2(dot(z, z))) + 4.0;
+    col = pal(log(sm + 1.0) * 0.35 + t * 0.05) * (0.5 + uLevel * 1.4) * (1.0 - exp(-sm * 0.2));
+  }else{
+    col = pal(t * 0.05) * 0.1 * (1.0 + uKick * 2.0);
+  }
+  col += pal(t * 0.05 + 0.5) * uKick * 0.15;
+  o = finish(col, uv);
+}`},
+{ name:'Gouttes', body:`
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  float f = 0.0;
+  for(int i = 0; i < 7; i++){
+    float fi = float(i);
+    vec2 c = 0.38 * vec2(sin(t * 0.5 + fi * 2.4), cos(t * 0.43 + fi * 1.9));
+    float r = 0.08 + 0.12 * spec(fi / 7.0 * 0.5) + 0.04 * uKick;
+    vec2 d = uv - c;
+    f += r * r / dot(d, d);
+  }
+  float body = smoothstep(0.9, 1.1, f);
+  float fc = min(f, 2.2);
+  vec3 col = pal(fc * 0.15 + t * 0.05) * body * (0.6 + uLevel * 1.2);
+  col += pal(fc * 0.15 + 0.5) * exp(-abs(f - 1.0) * 6.0) * 0.6;
+  o = finish(col, uv);
+}`},
+{ name:'Hyperespace', body:`
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  float r = length(uv), a = atan(uv.y, uv.x);
+  vec3 col = vec3(0.0);
+  for(int l = 0; l < 4; l++){
+    float fl = float(l);
+    float N = 30.0 + fl * 20.0;
+    vec2 q = vec2(a / 6.28318 * N, log(r + 0.001) * 3.0 - t * (0.6 + fl * 0.3) * (1.0 + uBass));
+    vec2 id = floor(q), f = fract(q);
+    float h = hash(id + fl * 13.0);
+    float sx = smoothstep(0.18, 0.0, abs(f.x - 0.5));
+    float sy = smoothstep(0.0, 0.9, f.y) * (1.0 - f.y);
+    col += pal(h + t * 0.03) * sx * sy * step(0.7, h) * r * 6.0 * (0.6 + uLevel * 1.5);
+  }
+  col += pal(t * 0.05) * exp(-r * 6.0) * (0.2 + uKick * 0.9);
+  o = finish(col, uv);
+}`}
+,
+{ name:'Méduse', body:`
+mat2 r2(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+float map(vec3 p){
+  float t = uTime;
+  float pulse = 1.0 + 0.10 * uBass + 0.08 * uKick;
+  // cloche : ellipsoïde qui se contracte à chaque kick
+  vec3 q = p - vec3(0.0, 0.35, 0.0);
+  float bell = length(q * vec3(1.0, 1.5 / pulse, 1.0)) - 0.55 * pulse;
+  bell = max(bell, 0.15 - p.y);                                             // ouverte dessous
+  // tentacules : bras fins qui ondulent
+  float r = length(p.xz), a = atan(p.z, p.x);
+  float wob = sin(p.y * 5.0 - t * 2.0 + a * 3.0) * 0.06 * (0.5 + uMid * 2.0);
+  float fall = smoothstep(0.1, -1.6, p.y);
+  float seg = 6.28318 / 7.0, aa = mod(a + seg * 0.5, seg) - seg * 0.5;   // 7 bras répétés autour de l'axe
+  float Rr = 0.12 + 0.18 * fall + wob;
+  float ten = length(vec2(r - Rr, r * aa)) - (0.04 + 0.05 * fall);
+  ten = max(ten, p.y - 0.3);                                                // les bras partent du bas de la cloche
+  ten = max(ten, -(p.y + 1.7));
+  return min(bell, ten);
+}
+void main(){
+  vec2 uv = uvOf();
+  float t = uTime;
+  vec3 ro = vec3(0.0, -0.2, -3.2);
+  vec3 rd = normalize(vec3(uv, 1.9));
+  mat2 R = r2(t * 0.15);
+  ro.xz = R * ro.xz; rd.xz = R * rd.xz;
+  float glow = 0.0, tt = 0.0, hit = 0.0;
+  for(int i = 0; i < 70; i++){
+    vec3 p = ro + rd * tt;
+    float d = map(p);
+    glow += exp(-max(d, 0.0) * 9.0) * 0.03;                                // halo autour des formes
+    if(d < 0.002){ hit = 1.0; break; }
+    tt += max(d, 0.02);
+    if(tt > 6.0) break;
+  }
+  vec3 col = pal(glow * 0.6 + t * 0.03) * glow * (1.0 + uLevel * 1.2);
+  col += pal(t * 0.04 + 0.5) * hit * (0.4 + uKick * 0.8);
+  col += pal(0.2) * exp(-length(uv) * 3.0) * 0.05;
+  o = finish(col, uv);
 }`}
 ];
-const SCENE_KEYS = ['1','2','3','4','5','6','7','8','9','0','q','w','e','r','t'];
+const SCENE_KEYS = ['1','2','3','4','5','6','7','8','9','0','q','w','e','r','t','y','u','i','o','j','k','l','z','x','c'];
 const IMG_MODES = ['Pulse', 'Liquide', 'Kaléido', 'Glitch', 'Chute'];
 
 /* ═════════════════════ Compilation ═════════════════════ */
@@ -764,6 +982,16 @@ $('#qual').onchange = e => { state.quality = parseFloat(e.target.value); resize(
 
 function setStatus(html){ $('#status').innerHTML = html; }
 const esc = s => s.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+
+/* Panneau repliable (bouton ✕ / ☰, touche H), mémorisé dans le navigateur */
+function setCollapsed(on){
+  document.body.classList.toggle('collapsed', on);
+  try{ localStorage.setItem('ondine.collapsed', on ? '1' : '0'); }catch(e){}
+}
+$('#uiClose').onclick = () => setCollapsed(true);
+$('#uiOpen').onclick = () => setCollapsed(false);
+try{ if(localStorage.getItem('ondine.collapsed') === '1') document.body.classList.add('collapsed'); }catch(e){}
 
 /* Interface qui s'efface quand la souris dort */
 let idleTimer;
@@ -1169,7 +1397,7 @@ $('#bFull').onclick = toggleFull;
 addEventListener('keydown', e => {
   if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   const k = e.key.toLowerCase();
-  if(k === 'h'){ document.body.classList.toggle('idle'); clearTimeout(idleTimer); }
+  if(k === 'h') setCollapsed(!document.body.classList.contains('collapsed'));
   else if(k === 'f') toggleFull();
   else if(k === 'p') setPal((state.pal + 1) % PALETTES.length);
   else if(k === 'arrowright') setScene((state.scene + 1) % SCENES.length);
@@ -1389,6 +1617,22 @@ defNode('counter', {
     return {out:i / (steps - 1), idx:i};
   }
 });
+defNode('seq', {
+  title:'Séquenceur', kind:'num',
+  in:[{k:'trig',label:'pas (impulsion)',type:'num',def:0,min:0,max:1,step:0.01},
+      {k:'steps',label:'longueur',type:'num',def:4,min:1,max:8,step:1},
+      {k:'v0',label:'valeur 1',type:'num',def:0,min:0,max:1,step:0.01},{k:'v1',label:'valeur 2',type:'num',def:0.33,min:0,max:1,step:0.01},
+      {k:'v2',label:'valeur 3',type:'num',def:0.66,min:0,max:1,step:0.01},{k:'v3',label:'valeur 4',type:'num',def:1,min:0,max:1,step:0.01},
+      {k:'v4',label:'valeur 5',type:'num',def:0.5,min:0,max:1,step:0.01},{k:'v5',label:'valeur 6',type:'num',def:0.2,min:0,max:1,step:0.01},
+      {k:'v6',label:'valeur 7',type:'num',def:0.8,min:0,max:1,step:0.01},{k:'v7',label:'valeur 8',type:'num',def:0.4,min:0,max:1,step:0.01}],
+  out:[{k:'out',label:'valeur',type:'num'},{k:'idx',label:'pas',type:'num'}],
+  calc:(n, inp) => {
+    const steps = Math.max(1, Math.round(inp.steps));
+    if(edge(n, 'tr', inp.trig)) n.st.i = ((n.st.i || 0) + 1) % steps;
+    const i = (n.st.i || 0) % steps;
+    return {out:inp['v' + i], idx:i};                                        // la valeur du pas courant
+  }
+});
 defNode('delay', {
   title:'Retard', kind:'num',
   in:[{k:'in',label:'entrée',type:'num',def:0,min:0,max:1,step:0.01},
@@ -1562,6 +1806,7 @@ defNode('scene', {
   title:'Scène', kind:'tex',
   in:[{k:'speed',label:'vitesse',type:'num',def:1,min:0.1,max:3,step:0.05},
       {k:'sym',label:'symétrie',type:'num',def:8,min:3,max:16,step:1},
+      {k:'pick',label:'scène (choix, -1 = carte)',type:'num',def:-1,min:-1,max:23,step:1},
       {k:'bass',label:'graves',type:'num',def:0,auto:'bass'},{k:'mid',label:'médiums',type:'num',def:0,auto:'mid'},
       {k:'treble',label:'aigus',type:'num',def:0,auto:'treble'},{k:'level',label:'niveau',type:'num',def:0,auto:'level'},
       {k:'kick',label:'kick',type:'num',def:0,auto:'kick'}],
@@ -1570,7 +1815,7 @@ defNode('scene', {
          {k:'imgMode',label:'mode image',def:0,options:IMG_MODES}],
   out:[{k:'out',label:'image',type:'tex'}],
   render:(n, v, ctx) => {
-    const i = Math.max(0, Math.min(SCENES.length - 1, Math.round(n.props.scene)));
+    const i = Math.max(0, Math.min(SCENES.length - 1, Math.round(v.pick >= 0 ? v.pick : n.props.scene)));   // une entrée reliée (ex. séquenceur) choisit la scène
     const pr = getProgram(i), u = pr.loc;
     n.st.T = (n.st.T || 0) + ctx.dt * v.speed * (0.6 + v.level * 1.2);
     PALETTES[Math.round(n.props.palette) % PALETTES.length].s.forEach((h, k) => gradCache.set(hexToRgb(h), k * 3));
@@ -1698,6 +1943,54 @@ vec4 fx(vec2 q){
 }`);
 defFx('invert', 'Inverser', [P('amt','quantité',1,0,1,0.01)], `
 vec4 fx(vec2 q){ vec3 c = T(q).rgb; return vec4(mix(c, 1.0 - c, uP0), 1.0); }`);
+defFx('levels', 'Contraste & N/B', [P('con','contraste',1,0,3,0.01), P('gris','désaturer',0,0,1,0.01), P('seuil','seuil noir/blanc',0,0,1,0.01)], `
+vec4 fx(vec2 q){
+  vec3 c = T(q).rgb;
+  float l = dot(c, vec3(0.299, 0.587, 0.114));
+  c = mix(c, vec3(l), uP1);                                                  // désaturation
+  c = (c - 0.5) * uP0 + 0.5;                                                 // contraste autour du gris
+  if(uP2 > 0.0){ float k = step(uP2, dot(clamp(c, 0.0, 1.0), vec3(0.299, 0.587, 0.114))); c = vec3(k); }
+  return vec4(clamp(c, 0.0, 1.0), 1.0);
+}`);
+/* Jeux de caractères de l'effet ASCII (« trié » = classé automatiquement du plus vide au plus plein) */
+const HIRA = 'あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん';
+const KATA = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン';
+const ASCII_ALL = Array.from({length:95}, (_, i) => String.fromCharCode(32 + i));
+const GLYPH_SETS = [
+  {n:'Classique', chars:[' ', '.', ':', '-', '=', '+', '*', '#', '%', '@']},
+  {n:'Chiffres',  chars:[' ', '1', '7', '4', '2', '3', '5', '9', '0', '8']},
+  {n:'Lettres',   chars:[' ', 'i', 'l', 't', 'r', 'c', 'o', 'a', 'e', 'W']},
+  {n:'Symboles',  chars:[' ', '.', '`', ',', '-', '~', '+', '=', '*', '#']},
+  {n:'Kanas',     chars:[' '].concat([...HIRA], [...KATA]), sort:true},
+  {n:'Tous',      chars:ASCII_ALL.concat([...HIRA], [...KATA]), sort:true},
+];
+defFx('ascii', 'ASCII', [P('cell','taille (px)',16,4,32,1), P('gain','éclat',1.4,0.5,3,0.05), P('mono','blanc (0 = couleurs)',0,0,1,0.01), P('jeu','jeu de caractères',0,0,GLYPH_SETS.length-1,1,GLYPH_SETS.map(g => g.n))], `
+uniform sampler2D uGlyph; uniform float uN, uOff, uC, uR;                    // atlas des caractères (voir getGlyphTex)
+vec4 fx(vec2 q){
+  float cs = max(4.0, floor(uP0 + 0.5));
+  vec2 px = q * uRes, cell = floor(px / cs);
+  vec2 cc = (cell + 0.5) * cs / uRes;
+  vec3 c = T(cc).rgb;                                                        // couleur moyenne de la cellule
+  float l = dot(c, vec3(0.299, 0.587, 0.114));
+  float prev = texture(uPrev, cc).a;                                         // luminosité lissée de l'image précédente
+  float lsm = prev > 0.0 ? mix(l, prev, 0.9) : l;                            // lissage : le caractère ne change pas à chaque image
+  float idx = floor(clamp(lsm, 0.0, 1.0) * (uN - 1.0) + 0.5);
+  vec2 loc = fract(px / cs);
+  float gi = uOff + idx;
+  float ink = texture(uGlyph, vec2((mod(gi, uC) + loc.x) / uC, (floor(gi / uC) + 1.0 - loc.y) / uR)).r;
+  vec3 col = mix(min(c * uP1, 1.0), vec3(1.0), uP2);
+  return vec4(col * ink, lsm);                                               // la luminosité lissée est gardée dans le canal alpha
+}`, {feedback:true});
+defFx('glitch', 'Glitch', [P('amt','intensité',0,0,1,0.01), P('bands','tranches',14,2,60,1), P('rate','changements/s',8,1,30,0.5)], `
+vec4 fx(vec2 q){
+  float b = floor(q.y * floor(uP1 + 0.5)), st = floor(uTime * uP2);
+  float h = hash(vec2(b, st));
+  float on = step(1.0 - uP0 * 0.8, h);                                      // une part des tranches décroche
+  float sh = (hash(vec2(b + 3.0, st + 7.0)) - 0.5) * 0.25 * uP0 * on;
+  float e = 0.02 * uP0 * on;
+  vec2 p = vec2(q.x + sh, q.y);
+  return vec4(T(p + vec2(e, 0.0)).r, T(p).g, T(p - vec2(e, 0.0)).b, 1.0);
+}`);
 defFx('strips', 'Bandes décalées', [P('bands','bandes',24,4,80,1), P('amt','décalage',0.05,0,0.3,0.001), P('speed','changements/s',10,0,30,0.5)], `
 vec4 fx(vec2 q){
   float band = floor(q.y * floor(uP0 + 0.5)), st = floor(uTime * uP2);
@@ -1774,6 +2067,46 @@ vec4 fx(vec2 q){
 }`, {nopal:true});
 
 const fxProgs = {};
+/* Atlas de caractères pour l'effet ASCII : une grille de glyphes, un jeu = une plage de cette grille */
+const GLYPH_COLS = 32, GLYPH_CELL = 48;
+let glyphTex = null, glyphRows = 1;
+const GLYPH_OFF = [], GLYPH_LEN = [];
+function inkOf(ch, ctx, S){                                              // quantité d'encre d'un caractère (pour trier du plus vide au plus plein)
+  ctx.clearRect(0, 0, S, S); ctx.fillText(ch, S / 2, S / 2 + 1);
+  const d = ctx.getImageData(0, 0, S, S).data; let s = 0;
+  for(let i = 0; i < d.length; i += 4) s += d[i + 3];
+  return s;
+}
+function getGlyphTex(){
+  if(glyphTex) return glyphTex;
+  const S = GLYPH_CELL, m = document.createElement('canvas');
+  m.width = S; m.height = S;
+  const mx = m.getContext('2d', {willReadFrequently:true});
+  mx.fillStyle = '#fff'; mx.textAlign = 'center'; mx.textBaseline = 'middle';
+  mx.font = Math.round(S * 0.78) + 'px ui-monospace, Menlo, Consolas, "Hiragino Kaku Gothic ProN", "Noto Sans JP", monospace';
+  const all = [];
+  GLYPH_SETS.forEach(set => {
+    let ch = set.chars.slice();
+    if(set.sort) ch = ch.map(c => [c, inkOf(c, mx, S)]).sort((x, y) => x[1] - y[1]).map(x => x[0]);
+    GLYPH_OFF.push(all.length); GLYPH_LEN.push(ch.length); all.push(...ch);
+  });
+  glyphRows = Math.ceil(all.length / GLYPH_COLS);
+  const cv = document.createElement('canvas');
+  cv.width = S * GLYPH_COLS; cv.height = S * glyphRows;
+  const x = cv.getContext('2d');
+  x.fillStyle = '#fff'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.font = mx.font;
+  all.forEach((ch, g) => x.fillText(ch, (g % GLYPH_COLS) * S + S / 2, Math.floor(g / GLYPH_COLS) * S + S / 2 + 1));
+  glyphTex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, glyphTex);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv);
+  gl.generateMipmap(gl.TEXTURE_2D);                                          // glyphes réduits proprement : rendu de texte, pas de blocs
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return glyphTex;
+}
 function fxProgram(type){
   if(fxProgs[type]) return fxProgs[type];
   const T = NODE_TYPES[type], p = gl.createProgram();
@@ -1782,7 +2115,7 @@ function fxProgram(type){
   gl.linkProgram(p);
   if(!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
   const loc = {};
-  ['uIn','uIn2','uPrev','uRes','uTime','uKick','uP0','uP1','uP2','uP3','uGrad','uImg','uImgAspect'].forEach(k => loc[k] = gl.getUniformLocation(p, k));
+  ['uIn','uIn2','uPrev','uRes','uTime','uKick','uP0','uP1','uP2','uP3','uGrad','uImg','uImgAspect','uGlyph','uN','uOff','uC','uR'].forEach(k => loc[k] = gl.getUniformLocation(p, k));
   return fxProgs[type] = {p, loc};
 }
 function renderFx(n, v, ctx){
@@ -1804,6 +2137,12 @@ function renderFx(n, v, ctx){
   useTex(2, v.in);  gl.uniform1i(u.uIn, 2);
   useTex(3, v.in2); gl.uniform1i(u.uIn2, 3);
   useTex(4, n.prevT ? n.prevT.tex : null); gl.uniform1i(u.uPrev, 4);
+  if(u.uGlyph){                                                          // effet ASCII : atlas + jeu choisi
+    useTex(5, getGlyphTex()); gl.uniform1i(u.uGlyph, 5);
+    const j = Math.max(0, Math.min(GLYPH_SETS.length - 1, Math.round(v.jeu)));
+    gl.uniform1f(u.uN, GLYPH_LEN[j]); gl.uniform1f(u.uOff, GLYPH_OFF[j]);
+    gl.uniform1f(u.uC, GLYPH_COLS); gl.uniform1f(u.uR, glyphRows);
+  }
   if(T.fx.gen){                                                          // générateurs : palette (+ image perso)
     PALETTES[Math.round(n.props.palette || 0) % PALETTES.length].s.forEach((h, k) => gradCache.set(hexToRgb(h), k * 3));
     gl.uniform3fv(u.uGrad, gradCache);
@@ -2025,9 +2364,9 @@ addEventListener('pointerup', () => { MOUSE.down = 0; });
 /* ═════════════════════ Éditeur de nœuds : interactions ═════════════════════ */
 
 const MENU = [
-  ['Sources & calcul', ['audio','band','tempo','mouse','slider','lfo','random','math','remap','smooth','delay','counter','select','threshold']],
+  ['Sources & calcul', ['audio','band','tempo','mouse','slider','lfo','random','math','remap','smooth','delay','counter','seq','select','threshold']],
   ['Images', ['scene','gradient','shapes','noisegen','imagegen']],
-  ['Effets', ['mirror','zoom','rgb','feedback','pixel','color','glow','mix','blur','wave','grain','vignette','invert','strips','edge','tile','poster']],
+  ['Effets', ['mirror','zoom','rgb','feedback','pixel','color','glow','mix','blur','wave','grain','vignette','invert','strips','edge','tile','poster','glitch','levels','ascii']],
   ['Sortie', ['output']],
 ];
 const gbar = gEl.querySelector('#gbar'), gmenu = gEl.querySelector('#gmenu'), gmarq = gEl.querySelector('#gmarq');
